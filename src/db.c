@@ -15,6 +15,8 @@ int init_db(const char *db_path) {
                             "id INTEGER PRIMARY KEY AUTOINCREMENT,"
                             "slug TEXT UNIQUE NOT NULL,"
                             "url TEXT NOT NULL,"
+                            "expires_at DATETIME,"
+                            "password TEXT,"
                             "created_at DATETIME DEFAULT CURRENT_TIMESTAMP);";
                             
     const char *sql_visits = "CREATE TABLE IF NOT EXISTS visits ("
@@ -35,6 +37,11 @@ int init_db(const char *db_path) {
         sqlite3_free(err_msg);
         return -1;
     }
+    
+    // Add columns if they don't exist (ignore errors)
+    sqlite3_exec(db, "ALTER TABLE links ADD COLUMN expires_at DATETIME;", 0, 0, NULL);
+    sqlite3_exec(db, "ALTER TABLE links ADD COLUMN password TEXT;", 0, 0, NULL);
+
     if (sqlite3_exec(db, sql_visits, 0, 0, &err_msg) != SQLITE_OK) {
         log_error("Failed to create visits table: %s", err_msg);
         sqlite3_free(err_msg);
@@ -49,13 +56,26 @@ int init_db(const char *db_path) {
     return 0;
 }
 
-int insert_link(const char *slug, const char *url) {
-    const char *sql = "INSERT INTO links (slug, url) VALUES (?, ?);";
+int insert_link(const char *slug, const char *url, int ttl_hours, const char *password) {
+    const char *sql;
+    if (ttl_hours > 0) {
+        sql = "INSERT INTO links (slug, url, expires_at, password) VALUES (?, ?, datetime('now', '+' || ? || ' hours'), ?);";
+    } else {
+        sql = "INSERT INTO links (slug, url, password) VALUES (?, ?, ?);";
+    }
+    
     sqlite3_stmt *res;
     if (sqlite3_prepare_v2(db, sql, -1, &res, 0) != SQLITE_OK) return -1;
     
     sqlite3_bind_text(res, 1, slug, -1, SQLITE_STATIC);
     sqlite3_bind_text(res, 2, url, -1, SQLITE_STATIC);
+    
+    if (ttl_hours > 0) {
+        sqlite3_bind_int(res, 3, ttl_hours);
+        sqlite3_bind_text(res, 4, password && strlen(password) > 0 ? password : NULL, -1, SQLITE_STATIC);
+    } else {
+        sqlite3_bind_text(res, 3, password && strlen(password) > 0 ? password : NULL, -1, SQLITE_STATIC);
+    }
     
     int rc = sqlite3_step(res);
     sqlite3_finalize(res);
@@ -64,25 +84,98 @@ int insert_link(const char *slug, const char *url) {
     return 0;
 }
 
-int get_link(const char *slug, char *url_out, int max_len) {
-    const char *sql = "SELECT url FROM links WHERE slug = ?;";
+int get_link(const char *slug, char *url_out, int max_len, int *requires_pwd) {
+    *requires_pwd = 0;
+    
+    // Check expiration and get data
+    const char *sql = "SELECT url, password, expires_at FROM links WHERE slug = ?;";
     sqlite3_stmt *res;
     if (sqlite3_prepare_v2(db, sql, -1, &res, 0) != SQLITE_OK) return -1;
     
     sqlite3_bind_text(res, 1, slug, -1, SQLITE_STATIC);
     
     int rc = sqlite3_step(res);
-    int found = 0;
     if (rc == SQLITE_ROW) {
         const unsigned char *url = sqlite3_column_text(res, 0);
+        const unsigned char *password = sqlite3_column_text(res, 1);
+        const unsigned char *expires_at = sqlite3_column_text(res, 2);
+        
+        if (expires_at) {
+            // Check if expired
+            const char *sql_check = "SELECT 1 WHERE datetime('now') > ?;";
+            sqlite3_stmt *check_res;
+            if (sqlite3_prepare_v2(db, sql_check, -1, &check_res, 0) == SQLITE_OK) {
+                sqlite3_bind_text(check_res, 1, (const char *)expires_at, -1, SQLITE_STATIC);
+                if (sqlite3_step(check_res) == SQLITE_ROW) {
+                    sqlite3_finalize(check_res);
+                    sqlite3_finalize(res);
+                    return -2; // Expired
+                }
+                sqlite3_finalize(check_res);
+            }
+        }
+        
+        if (password && strlen((const char *)password) > 0) {
+            *requires_pwd = 1;
+            sqlite3_finalize(res);
+            return 0; // Requires password
+        }
+        
         if (url) {
             strncpy(url_out, (const char *)url, max_len - 1);
             url_out[max_len - 1] = '\0';
-            found = 1;
+            sqlite3_finalize(res);
+            return 0;
         }
     }
+    
     sqlite3_finalize(res);
-    return found ? 0 : -1;
+    return -1; // Not found
+}
+
+int get_link_with_password(const char *slug, const char *password_in, char *url_out, int max_len) {
+    const char *sql = "SELECT url, password, expires_at FROM links WHERE slug = ?;";
+    sqlite3_stmt *res;
+    if (sqlite3_prepare_v2(db, sql, -1, &res, 0) != SQLITE_OK) return -1;
+    
+    sqlite3_bind_text(res, 1, slug, -1, SQLITE_STATIC);
+    
+    int rc = sqlite3_step(res);
+    if (rc == SQLITE_ROW) {
+        const unsigned char *url = sqlite3_column_text(res, 0);
+        const unsigned char *password = sqlite3_column_text(res, 1);
+        const unsigned char *expires_at = sqlite3_column_text(res, 2);
+        
+        if (expires_at) {
+            // Check if expired
+            const char *sql_check = "SELECT 1 WHERE datetime('now') > ?;";
+            sqlite3_stmt *check_res;
+            if (sqlite3_prepare_v2(db, sql_check, -1, &check_res, 0) == SQLITE_OK) {
+                sqlite3_bind_text(check_res, 1, (const char *)expires_at, -1, SQLITE_STATIC);
+                if (sqlite3_step(check_res) == SQLITE_ROW) {
+                    sqlite3_finalize(check_res);
+                    sqlite3_finalize(res);
+                    return -2; // Expired
+                }
+                sqlite3_finalize(check_res);
+            }
+        }
+        
+        if (password && password_in && strcmp((const char *)password, password_in) == 0) {
+            if (url) {
+                strncpy(url_out, (const char *)url, max_len - 1);
+                url_out[max_len - 1] = '\0';
+                sqlite3_finalize(res);
+                return 0;
+            }
+        } else {
+            sqlite3_finalize(res);
+            return -4; // Wrong password
+        }
+    }
+    
+    sqlite3_finalize(res);
+    return -1; // Not found
 }
 
 int record_visit(const char *slug, const char *ip, const char *user_agent) {

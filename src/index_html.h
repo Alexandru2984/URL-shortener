@@ -40,6 +40,8 @@
 "        }\n" \
 "        h1 { text-align: center; margin-bottom: 1.5rem; font-size: 1.5rem; font-weight: 600; }\n" \
 "        .form-group { margin-bottom: 1rem; }\n" \
+"        .row { display: flex; gap: 1rem; }\n" \
+"        .col { flex: 1; }\n" \
 "        label { display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: #cbd5e1; }\n" \
 "        input {\n" \
 "            width: 100%;\n" \
@@ -64,6 +66,7 @@
 "            font-weight: 500;\n" \
 "            cursor: pointer;\n" \
 "            transition: background-color 0.2s;\n" \
+"            margin-top: 10px;\n" \
 "        }\n" \
 "        button:hover { background: var(--primary-hover); }\n" \
 "        #result {\n" \
@@ -97,6 +100,16 @@
 "            <label for=\"slug\">Custom Slug (Optional)</label>\n" \
 "            <input type=\"text\" id=\"slug\" placeholder=\"my-link\">\n" \
 "        </div>\n" \
+"        <div class=\"row\">\n" \
+"            <div class=\"form-group col\">\n" \
+"                <label for=\"pwd\">Password (Opt)</label>\n" \
+"                <input type=\"password\" id=\"pwd\" placeholder=\"secret\">\n" \
+"            </div>\n" \
+"            <div class=\"form-group col\">\n" \
+"                <label for=\"ttl\">Expire in (Hours, Opt)</label>\n" \
+"                <input type=\"number\" id=\"ttl\" placeholder=\"24\" min=\"1\">\n" \
+"            </div>\n" \
+"        </div>\n" \
 "        <button id=\"submitBtn\">Shorten Link</button>\n" \
 "        <div id=\"result\"></div>\n" \
 "    </div>\n" \
@@ -104,6 +117,8 @@
 "        document.getElementById('submitBtn').addEventListener('click', async () => {\n" \
 "            const url = document.getElementById('url').value;\n" \
 "            const slug = document.getElementById('slug').value;\n" \
+"            const pwd = document.getElementById('pwd').value;\n" \
+"            const ttl = parseInt(document.getElementById('ttl').value) || 0;\n" \
 "            const resDiv = document.getElementById('result');\n" \
 "            const btn = document.getElementById('submitBtn');\n" \
 "            if(!url) {\n" \
@@ -117,7 +132,7 @@
 "                const response = await fetch('/shorten', {\n" \
 "                    method: 'POST',\n" \
 "                    headers: { 'Content-Type': 'application/json' },\n" \
-"                    body: JSON.stringify({ url: url, custom_slug: slug })\n" \
+"                    body: JSON.stringify({ url: url, custom_slug: slug, password: pwd, ttl_hours: ttl })\n" \
 "                });\n" \
 "                const data = await response.json();\n" \
 "                resDiv.style.display = 'block';\n" \
@@ -125,6 +140,7 @@
 "                    resDiv.innerHTML = `\n" \
 "                        <div style=\"margin-bottom: 8px; color: #94a3b8; font-size: 0.875rem;\">Your short link:</div>\n" \
 "                        <a href=\"${data.short_url}\" target=\"_blank\">${data.short_url}</a>\n" \
+"                        <img src=\"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(data.short_url)}\" style=\"margin-bottom: 10px; border-radius: 8px;\" />\n" \
 "                        <button class=\"copy-btn\" onclick=\"navigator.clipboard.writeText('${data.short_url}'); this.innerText='Copied!'; setTimeout(()=>this.innerText='Copy to clipboard', 2000);\">Copy to clipboard</button>\n" \
 "                    `;\n" \
 "                } else {\n" \
