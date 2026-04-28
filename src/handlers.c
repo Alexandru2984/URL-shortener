@@ -1,6 +1,7 @@
 #include "handlers.h"
 #include "db.h"
 #include "utils.h"
+#include "index_html.h"
 #include <cjson/cJSON.h>
 #include <string.h>
 #include <stdlib.h>
@@ -181,7 +182,7 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
         // Handle redirect
         const char *slug = url + 1; // Skip leading '/'
         if (strlen(slug) == 0) {
-             const char *html = "<!DOCTYPE html><html><head><title>URL Shortener</title><style>body{font-family:sans-serif;margin:40px;text-align:center;}input,button{padding:10px;font-size:16px;}#res{margin-top:20px;font-weight:bold;a{color:#007BFF;}}</style></head><body><h2>C URL Shortener</h2><input id='url' type='text' placeholder='Enter long URL (http://...)' style='width:300px;'><input id='slug' type='text' placeholder='Custom slug (opt)' style='width:150px;'><button onclick='s()'>Shorten</button><div id='res'></div><script>async function s(){const u=document.getElementById(\"url\").value,c=document.getElementById(\"slug\").value;const r=await fetch(\"/shorten\",{method:\"POST\",headers:{\"Content-Type\":\"application/json\"},body:JSON.stringify({url:u,custom_slug:c})});const j=await r.json();document.getElementById(\"res\").innerHTML=j.short_url?`<a href=\"${j.short_url}\" target=\"_blank\">${j.short_url}</a>`:`Error: ${j.error}`;}</script></body></html>";
+             const char *html = INDEX_HTML;
              struct MHD_Response *response = MHD_create_response_from_buffer(strlen(html), (void *)html, MHD_RESPMEM_PERSISTENT);
              MHD_add_response_header(response, "Content-Type", "text/html; charset=utf-8");
              int ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
