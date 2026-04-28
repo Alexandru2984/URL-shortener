@@ -118,10 +118,18 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
                     return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid schema");
                 }
 
+                char base_slug[MAX_SLUG_LEN];
                 char slug[MAX_SLUG_LEN];
+                int is_custom = 0;
+                
                 if (cJSON_IsString(custom_slug) && custom_slug->valuestring && strlen(custom_slug->valuestring) > 0) {
-                    strncpy(slug, custom_slug->valuestring, MAX_SLUG_LEN - 1);
-                    slug[MAX_SLUG_LEN - 1] = '\0';
+                    slugify(custom_slug->valuestring, base_slug, MAX_SLUG_LEN);
+                    if (strlen(base_slug) == 0) {
+                        generate_random_slug(slug, 6);
+                    } else {
+                        strcpy(slug, base_slug);
+                        is_custom = 1;
+                    }
                 } else {
                     generate_random_slug(slug, 6);
                 }
@@ -134,7 +142,18 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
                     pwd = password_json->valuestring;
                 }
 
-                if (insert_link(slug, target_url->valuestring, ttl, pwd) != 0) {
+                int insert_res = insert_link(slug, target_url->valuestring, ttl, pwd);
+                if (insert_res != 0 && is_custom) {
+                    for (int attempts = 0; attempts < 10; attempts++) {
+                        char suffix[6];
+                        generate_random_slug(suffix, 4);
+                        snprintf(slug, MAX_SLUG_LEN, "%.*s-%s", MAX_SLUG_LEN - 6, base_slug, suffix);
+                        insert_res = insert_link(slug, target_url->valuestring, ttl, pwd);
+                        if (insert_res == 0) break;
+                    }
+                }
+
+                if (insert_res != 0) {
                     cJSON_Delete(json);
                     return send_error(connection, MHD_HTTP_CONFLICT, "Slug exists or DB error");
                 }

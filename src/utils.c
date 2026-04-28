@@ -7,6 +7,24 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <ctype.h>
+
+void slugify(const char *input, char *output, int max_len) {
+    int i = 0, j = 0;
+    while (input[i] && j < max_len - 1) {
+        char c = input[i];
+        if (isalnum((unsigned char)c)) {
+            output[j++] = tolower((unsigned char)c);
+        } else if (c == ' ' || c == '-' || c == '_') {
+            if (j > 0 && output[j-1] != '-') {
+                output[j++] = '-';
+            }
+        }
+        i++;
+    }
+    if (j > 0 && output[j-1] == '-') j--;
+    output[j] = '\0';
+}
 
 void generate_random_slug(char *slug_out, int len) {
     const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
