@@ -28,9 +28,28 @@ void slugify(const char *input, char *output, int max_len) {
 
 void generate_random_slug(char *slug_out, int len) {
     const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const int charset_len = (int)(sizeof(charset) - 1);
+    unsigned char rand_bytes[64]; // Max slug length supported
+    if (len > (int)sizeof(rand_bytes)) len = (int)sizeof(rand_bytes);
+
+    FILE *urandom = fopen("/dev/urandom", "rb");
+    if (urandom) {
+        size_t read = fread(rand_bytes, 1, len, urandom);
+        fclose(urandom);
+        if (read != (size_t)len) {
+            // Fallback: should not happen on Linux
+            log_error("Failed to read from /dev/urandom");
+        }
+    } else {
+        // Last resort fallback (should never happen on Linux)
+        log_error("Cannot open /dev/urandom, falling back to rand()");
+        for (int i = 0; i < len; i++) {
+            rand_bytes[i] = (unsigned char)(rand() % 256);
+        }
+    }
+
     for (int i = 0; i < len; i++) {
-        int key = rand() % (int)(sizeof(charset) - 1);
-        slug_out[i] = charset[key];
+        slug_out[i] = charset[rand_bytes[i] % charset_len];
     }
     slug_out[len] = '\0';
 }

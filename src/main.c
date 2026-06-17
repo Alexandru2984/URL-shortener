@@ -15,7 +15,6 @@ extern void request_completed(void *cls, struct MHD_Connection *connection,
                        void **con_cls, enum MHD_RequestTerminationCode toe);
 
 int main() {
-    srand(time(NULL));
 
     // Ensure directories exist
     mkdir("data", 0755);
@@ -26,7 +25,12 @@ int main() {
         return 1;
     }
 
-    int port = find_available_port(DEFAULT_PORT);
+    const char *port_env = getenv("PORT");
+    int port = port_env && port_env[0] ? atoi(port_env) : find_available_port(DEFAULT_PORT);
+    if (port <= 0 || port > 65535) {
+        fprintf(stderr, "Invalid PORT value: %s\n", port_env);
+        return 1;
+    }
     log_message("Starting server...");
     log_message("Found available port: %d", port);
     log_message("Base URL: http://c.micutu.com");
