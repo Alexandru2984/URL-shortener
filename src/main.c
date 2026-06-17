@@ -4,15 +4,23 @@
 #include <microhttpd.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #define DEFAULT_PORT 8080
 
-// Need to declare request_completed
+// Declared in handlers.c
 extern void request_completed(void *cls, struct MHD_Connection *connection,
                        void **con_cls, enum MHD_RequestTerminationCode toe);
+
+static volatile sig_atomic_t running = 1;
+
+static void signal_handler(int signum) {
+    (void)signum;
+    running = 0;
+}
 
 int main() {
 
@@ -33,7 +41,7 @@ int main() {
     }
     log_message("Starting server...");
     log_message("Found available port: %d", port);
-    log_message("Base URL: http://c.micutu.com");
+    log_message("Base URL: https://c.micutu.com");
 
     struct MHD_Daemon *daemon;
 
@@ -47,11 +55,25 @@ int main() {
         return 1;
     }
 
-    // Keep running
-    while (1) {
-        sleep(60);
+    // Register signal handlers for graceful shutdown
+    struct sigaction sa;
+    sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
+
+    log_message("Server running on port %d (PID %d)", port, getpid());
+
+    // Keep running until signal received
+    while (running) {
+        sleep(1);
     }
 
+    // Graceful shutdown
+    log_message("Shutting down gracefully...");
     MHD_stop_daemon(daemon);
+    close_db();
+    log_message("Server stopped.");
     return 0;
 }

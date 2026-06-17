@@ -12,5 +12,6 @@ int get_link_with_password(const char *slug, const char *password, char *url_out
 int record_visit(const char *slug, const char *ip, const char *user_agent);
 int get_stats(const char *slug, int *total_visits, int *unique_visits);
 int check_rate_limit(const char *ip, int max_requests_per_min);
+void close_db(void);
 
 #endif

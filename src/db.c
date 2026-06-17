@@ -11,6 +11,13 @@ int init_db(const char *db_path) {
         return -1;
     }
 
+    // Enable WAL mode for better concurrent read/write performance
+    sqlite3_exec(db, "PRAGMA journal_mode=WAL;", 0, 0, NULL);
+    // Set busy timeout to 5 seconds for concurrent access
+    sqlite3_exec(db, "PRAGMA busy_timeout=5000;", 0, 0, NULL);
+    // Enable foreign keys
+    sqlite3_exec(db, "PRAGMA foreign_keys=ON;", 0, 0, NULL);
+
     const char *sql_links = "CREATE TABLE IF NOT EXISTS links ("
                             "id INTEGER PRIMARY KEY AUTOINCREMENT,"
                             "slug TEXT UNIQUE NOT NULL,"
@@ -258,4 +265,11 @@ int check_rate_limit(const char *ip, int max_requests_per_min) {
     }
 
     return 0; // OK
+}
+
+void close_db(void) {
+    if (db) {
+        sqlite3_close(db);
+        db = NULL;
+    }
 }
