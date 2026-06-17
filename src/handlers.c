@@ -12,6 +12,18 @@
 #define MAX_URL_LEN 2048
 #define MAX_SLUG_LEN 32
 
+// Global API key — set via API_KEY env var in main()
+const char *g_api_key = NULL;
+// Global base URL — set via BASE_URL env var in main()
+const char *g_base_url = "https://c.micutu.com";
+
+static int check_api_key(struct MHD_Connection *connection) {
+    if (!g_api_key || g_api_key[0] == '\0') return 1; // No key configured = open access
+    const char *provided = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "X-API-Key");
+    if (!provided) return 0;
+    return strcmp(provided, g_api_key) == 0;
+}
+
 struct connection_info_struct {
     int connection_type;
     char *data;
@@ -115,6 +127,10 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
             if (!json) return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid JSON");
 
             if (strcmp(url, "/shorten") == 0) {
+                if (!check_api_key(connection)) {
+                    cJSON_Delete(json);
+                    return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
+                }
                 cJSON *target_url = cJSON_GetObjectItemCaseSensitive(json, "url");
                 cJSON *custom_slug = cJSON_GetObjectItemCaseSensitive(json, "custom_slug");
                 cJSON *ttl_hours_json = cJSON_GetObjectItemCaseSensitive(json, "ttl_hours");
@@ -178,7 +194,7 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
 
                 cJSON *resp_json = cJSON_CreateObject();
                 char full_url[256];
-                snprintf(full_url, sizeof(full_url), "https://c.micutu.com/%s", slug);
+                snprintf(full_url, sizeof(full_url), "%s/%s", g_base_url, slug);
                 cJSON_AddStringToObject(resp_json, "short_url", full_url);
                 char *resp_str = cJSON_PrintUnformatted(resp_json);
 
@@ -291,6 +307,39 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
         MHD_add_response_header(response, "Location", target_url);
         add_security_headers(response);
         int ret = MHD_queue_response(connection, MHD_HTTP_FOUND, response);
+        MHD_destroy_response(response);
+        return ret;
+    }
+
+    // DELETE /<slug> — requires API key
+    if (strcasecmp(method, "DELETE") == 0) {
+        if (!check_api_key(connection)) {
+            return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
+        }
+
+        const char *slug = url + 1;
+        if (strlen(slug) == 0) {
+            return send_error(connection, MHD_HTTP_BAD_REQUEST, "Missing slug");
+        }
+
+        int result = delete_link(slug);
+        if (result == 0) {
+            log_message("Deleted link: %s", slug);
+            return send_json_response(connection, MHD_HTTP_OK, "{\"deleted\":true}");
+        } else {
+            return send_error(connection, MHD_HTTP_NOT_FOUND, "Slug not found");
+        }
+    }
+
+    // OPTIONS — CORS preflight
+    if (strcasecmp(method, "OPTIONS") == 0) {
+        struct MHD_Response *response = MHD_create_response_from_buffer(0, "", MHD_RESPMEM_PERSISTENT);
+        MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
+        MHD_add_response_header(response, "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+        MHD_add_response_header(response, "Access-Control-Allow-Headers", "Content-Type, X-API-Key");
+        MHD_add_response_header(response, "Access-Control-Max-Age", "86400");
+        add_security_headers(response);
+        int ret = MHD_queue_response(connection, MHD_HTTP_NO_CONTENT, response);
         MHD_destroy_response(response);
         return ret;
     }

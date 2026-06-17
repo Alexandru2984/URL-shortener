@@ -2,6 +2,7 @@
 #include "utils.h"
 #include <stdio.h>
 #include <string.h>
+#include <cjson/cJSON.h>
 
 sqlite3 *db = NULL;
 
@@ -269,6 +270,87 @@ int check_rate_limit(const char *ip, int max_requests_per_min) {
     }
 
     return 0; // OK
+}
+
+int delete_link(const char *slug) {
+    // Check if exists first
+    const char *sql_check = "SELECT 1 FROM links WHERE slug = ?;";
+    sqlite3_stmt *check_res;
+    if (sqlite3_prepare_v2(db, sql_check, -1, &check_res, 0) != SQLITE_OK) return -1;
+    sqlite3_bind_text(check_res, 1, slug, -1, SQLITE_STATIC);
+    int found = (sqlite3_step(check_res) == SQLITE_ROW);
+    sqlite3_finalize(check_res);
+    if (!found) return -1;
+
+    // Delete visits
+    const char *sql_visits = "DELETE FROM visits WHERE slug = ?;";
+    sqlite3_stmt *v_res;
+    if (sqlite3_prepare_v2(db, sql_visits, -1, &v_res, 0) == SQLITE_OK) {
+        sqlite3_bind_text(v_res, 1, slug, -1, SQLITE_STATIC);
+        sqlite3_step(v_res);
+        sqlite3_finalize(v_res);
+    }
+
+    // Delete link
+    const char *sql_del = "DELETE FROM links WHERE slug = ?;";
+    sqlite3_stmt *d_res;
+    if (sqlite3_prepare_v2(db, sql_del, -1, &d_res, 0) != SQLITE_OK) return -1;
+    sqlite3_bind_text(d_res, 1, slug, -1, SQLITE_STATIC);
+    int rc = sqlite3_step(d_res);
+    sqlite3_finalize(d_res);
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+int cleanup_expired_links(void) {
+    // Delete visits for expired links
+    sqlite3_exec(db,
+        "DELETE FROM visits WHERE slug IN "
+        "(SELECT slug FROM links WHERE expires_at IS NOT NULL AND datetime('now') > expires_at);",
+        0, 0, NULL);
+
+    // Delete expired links
+    const char *sql = "DELETE FROM links WHERE expires_at IS NOT NULL AND datetime('now') > expires_at;";
+    sqlite3_exec(db, sql, 0, 0, NULL);
+
+    int deleted = sqlite3_changes(db);
+    return deleted;
+}
+
+char *get_all_links_json(void) {
+    const char *sql = "SELECT l.slug, l.url, l.created_at, l.expires_at, "
+                      "(l.password IS NOT NULL AND l.password != '') as has_pwd, "
+                      "(SELECT COUNT(*) FROM visits v WHERE v.slug = l.slug) as total_visits, "
+                      "(SELECT COUNT(DISTINCT v.ip) FROM visits v WHERE v.slug = l.slug) as unique_visits "
+                      "FROM links l ORDER BY l.created_at DESC;";
+    sqlite3_stmt *res;
+    if (sqlite3_prepare_v2(db, sql, -1, &res, 0) != SQLITE_OK) return NULL;
+
+    cJSON *arr = cJSON_CreateArray();
+    while (sqlite3_step(res) == SQLITE_ROW) {
+        cJSON *item = cJSON_CreateObject();
+        const char *slug = (const char *)sqlite3_column_text(res, 0);
+        const char *url = (const char *)sqlite3_column_text(res, 1);
+        const char *created = (const char *)sqlite3_column_text(res, 2);
+        const char *expires = (const char *)sqlite3_column_text(res, 3);
+        int has_pwd = sqlite3_column_int(res, 4);
+        int total = sqlite3_column_int(res, 5);
+        int unique = sqlite3_column_int(res, 6);
+
+        cJSON_AddStringToObject(item, "slug", slug ? slug : "");
+        cJSON_AddStringToObject(item, "url", url ? url : "");
+        cJSON_AddStringToObject(item, "created_at", created ? created : "");
+        if (expires) cJSON_AddStringToObject(item, "expires_at", expires);
+        else cJSON_AddNullToObject(item, "expires_at");
+        cJSON_AddBoolToObject(item, "has_password", has_pwd);
+        cJSON_AddNumberToObject(item, "total_visits", total);
+        cJSON_AddNumberToObject(item, "unique_visitors", unique);
+        cJSON_AddItemToArray(arr, item);
+    }
+    sqlite3_finalize(res);
+
+    char *json_str = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    return json_str;
 }
 
 void close_db(void) {
