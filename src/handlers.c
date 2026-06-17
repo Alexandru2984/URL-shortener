@@ -44,6 +44,7 @@ static int send_json_response(struct MHD_Connection *connection, int status_code
     int ret;
     response = MHD_create_response_from_buffer(strlen(json_str), (void *)json_str, MHD_RESPMEM_MUST_COPY);
     MHD_add_response_header(response, "Content-Type", "application/json");
+    MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
     add_security_headers(response);
     ret = MHD_queue_response(connection, status_code, response);
     MHD_destroy_response(response);

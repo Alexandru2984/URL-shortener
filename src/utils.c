@@ -8,6 +8,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <ctype.h>
+#include <pthread.h>
 #include <openssl/evp.h>
 
 void slugify(const char *input, char *output, int max_len) {
@@ -54,14 +55,21 @@ void generate_random_slug(char *slug_out, int len) {
     }
     slug_out[len] = '\0';
 }
+static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void log_to_file(const char *filename, const char *level, const char *format, va_list args) {
+    pthread_mutex_lock(&log_mutex);
+
     FILE *f = fopen(filename, "a");
-    if (!f) return;
+    if (!f) {
+        pthread_mutex_unlock(&log_mutex);
+        return;
+    }
     
     time_t now;
     time(&now);
-    struct tm *tm_info = localtime(&now);
+    struct tm tm_buf;
+    struct tm *tm_info = localtime_r(&now, &tm_buf);
     char time_buf[26];
     strftime(time_buf, 26, "%Y-%m-%d %H:%M:%S", tm_info);
     
@@ -69,6 +77,8 @@ static void log_to_file(const char *filename, const char *level, const char *for
     vfprintf(f, format, args);
     fprintf(f, "\n");
     fclose(f);
+
+    pthread_mutex_unlock(&log_mutex);
 }
 
 void log_message(const char *format, ...) {
