@@ -21,11 +21,18 @@ struct connection_info_struct {
 #define GET 0
 #define POST 1
 
+static void add_security_headers(struct MHD_Response *response) {
+    MHD_add_response_header(response, "X-Content-Type-Options", "nosniff");
+    MHD_add_response_header(response, "X-Frame-Options", "DENY");
+    MHD_add_response_header(response, "Referrer-Policy", "strict-origin-when-cross-origin");
+}
+
 static int send_json_response(struct MHD_Connection *connection, int status_code, const char *json_str) {
     struct MHD_Response *response;
     int ret;
     response = MHD_create_response_from_buffer(strlen(json_str), (void *)json_str, MHD_RESPMEM_MUST_COPY);
     MHD_add_response_header(response, "Content-Type", "application/json");
+    add_security_headers(response);
     ret = MHD_queue_response(connection, status_code, response);
     MHD_destroy_response(response);
     return ret;
@@ -44,6 +51,7 @@ static int send_error(struct MHD_Connection *connection, int status_code, const 
 static int send_html(struct MHD_Connection *connection, int status_code, const char *html) {
     struct MHD_Response *response = MHD_create_response_from_buffer(strlen(html), (void *)html, MHD_RESPMEM_PERSISTENT);
     MHD_add_response_header(response, "Content-Type", "text/html; charset=utf-8");
+    add_security_headers(response);
     int ret = MHD_queue_response(connection, status_code, response);
     MHD_destroy_response(response);
     return ret;
@@ -120,6 +128,11 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
                 if (strncmp(target_url->valuestring, "http://", 7) != 0 && strncmp(target_url->valuestring, "https://", 8) != 0) {
                     cJSON_Delete(json);
                     return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid schema");
+                }
+
+                if (strlen(target_url->valuestring) > MAX_URL_LEN) {
+                    cJSON_Delete(json);
+                    return send_error(connection, MHD_HTTP_BAD_REQUEST, "URL too long");
                 }
 
                 char base_slug[MAX_SLUG_LEN];
@@ -269,6 +282,7 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
 
         struct MHD_Response *response = MHD_create_response_from_buffer(0, "", MHD_RESPMEM_PERSISTENT);
         MHD_add_response_header(response, "Location", target_url);
+        add_security_headers(response);
         int ret = MHD_queue_response(connection, MHD_HTTP_FOUND, response);
         MHD_destroy_response(response);
         return ret;
