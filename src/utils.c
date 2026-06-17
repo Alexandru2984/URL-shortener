@@ -8,6 +8,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <ctype.h>
+#include <openssl/evp.h>
 
 void slugify(const char *input, char *output, int max_len) {
     int i = 0, j = 0;
@@ -124,4 +125,103 @@ int find_available_port(int start_port) {
         port++;
     }
     return port;
+}
+
+// --- Password hashing (SHA-256 with random salt) ---
+
+static void bytes_to_hex(const unsigned char *bytes, int len, char *hex_out) {
+    for (int i = 0; i < len; i++) {
+        sprintf(hex_out + (i * 2), "%02x", bytes[i]);
+    }
+    hex_out[len * 2] = '\0';
+}
+
+static int hex_to_bytes(const char *hex, unsigned char *bytes_out, int max_bytes) {
+    int hex_len = (int)strlen(hex);
+    int byte_len = hex_len / 2;
+    if (byte_len > max_bytes) byte_len = max_bytes;
+    for (int i = 0; i < byte_len; i++) {
+        unsigned int val;
+        if (sscanf(hex + (i * 2), "%02x", &val) != 1) return -1;
+        bytes_out[i] = (unsigned char)val;
+    }
+    return byte_len;
+}
+
+void hash_password(const char *password, char *hash_out, size_t hash_out_len) {
+    if (!password || hash_out_len < 97) {
+        if (hash_out && hash_out_len > 0) hash_out[0] = '\0';
+        return;
+    }
+
+    // Generate 16-byte random salt from /dev/urandom
+    unsigned char salt[16];
+    FILE *urandom = fopen("/dev/urandom", "rb");
+    if (urandom) {
+        if (fread(salt, 1, sizeof(salt), urandom) != sizeof(salt)) {
+            log_error("Short read from /dev/urandom for password salt");
+        }
+        fclose(urandom);
+    } else {
+        // Fallback (should not happen on Linux)
+        for (int i = 0; i < 16; i++) salt[i] = (unsigned char)(rand() % 256);
+    }
+
+    // SHA-256(salt + password)
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hash_len = 0;
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (ctx) {
+        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+        EVP_DigestUpdate(ctx, salt, sizeof(salt));
+        EVP_DigestUpdate(ctx, password, strlen(password));
+        EVP_DigestFinal_ex(ctx, hash, &hash_len);
+        EVP_MD_CTX_free(ctx);
+    }
+
+    // Output format: hex(salt):hex(hash) → 32 + 1 + 64 = 97 chars
+    char salt_hex[33];
+    char hash_hex[65];
+    bytes_to_hex(salt, 16, salt_hex);
+    bytes_to_hex(hash, (int)hash_len, hash_hex);
+    snprintf(hash_out, hash_out_len, "%s:%s", salt_hex, hash_hex);
+}
+
+int verify_password(const char *password, const char *stored_hash) {
+    if (!password || !stored_hash) return 0;
+
+    // Parse "salt_hex:hash_hex"
+    const char *colon = strchr(stored_hash, ':');
+    if (!colon) {
+        // Legacy plain-text comparison (for existing DB entries)
+        return strcmp(password, stored_hash) == 0;
+    }
+
+    int salt_hex_len = (int)(colon - stored_hash);
+    if (salt_hex_len != 32) return 0; // Invalid format
+
+    char salt_hex[33];
+    memcpy(salt_hex, stored_hash, 32);
+    salt_hex[32] = '\0';
+
+    unsigned char salt[16];
+    if (hex_to_bytes(salt_hex, salt, 16) != 16) return 0;
+
+    // Recompute SHA-256(salt + password)
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hash_len = 0;
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (ctx) {
+        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+        EVP_DigestUpdate(ctx, salt, sizeof(salt));
+        EVP_DigestUpdate(ctx, password, strlen(password));
+        EVP_DigestFinal_ex(ctx, hash, &hash_len);
+        EVP_MD_CTX_free(ctx);
+    }
+
+    char computed_hex[65];
+    bytes_to_hex(hash, (int)hash_len, computed_hex);
+
+    const char *expected_hex = colon + 1;
+    return strcmp(computed_hex, expected_hex) == 0;
 }

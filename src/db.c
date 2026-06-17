@@ -69,12 +69,20 @@ int insert_link(const char *slug, const char *url, int ttl_hours, const char *pa
     
     sqlite3_bind_text(res, 1, slug, -1, SQLITE_STATIC);
     sqlite3_bind_text(res, 2, url, -1, SQLITE_STATIC);
-    
+
+    // Hash password before storing
+    char pwd_hash[128];
+    const char *pwd_to_store = NULL;
+    if (password && strlen(password) > 0) {
+        hash_password(password, pwd_hash, sizeof(pwd_hash));
+        pwd_to_store = pwd_hash;
+    }
+
     if (ttl_hours > 0) {
         sqlite3_bind_int(res, 3, ttl_hours);
-        sqlite3_bind_text(res, 4, password && strlen(password) > 0 ? password : NULL, -1, SQLITE_STATIC);
+        sqlite3_bind_text(res, 4, pwd_to_store, -1, SQLITE_STATIC);
     } else {
-        sqlite3_bind_text(res, 3, password && strlen(password) > 0 ? password : NULL, -1, SQLITE_STATIC);
+        sqlite3_bind_text(res, 3, pwd_to_store, -1, SQLITE_STATIC);
     }
     
     int rc = sqlite3_step(res);
@@ -161,7 +169,7 @@ int get_link_with_password(const char *slug, const char *password_in, char *url_
             }
         }
         
-        if (password && password_in && strcmp((const char *)password, password_in) == 0) {
+        if (password && password_in && verify_password(password_in, (const char *)password)) {
             if (url) {
                 strncpy(url_out, (const char *)url, max_len - 1);
                 url_out[max_len - 1] = '\0';

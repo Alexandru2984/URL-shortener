@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -O2 -I./src
-LDFLAGS = -lmicrohttpd -lsqlite3 -lcjson -pthread
+LDFLAGS = -lmicrohttpd -lsqlite3 -lcjson -lcrypto -pthread
 
 SRC_DIR = src
 BIN_DIR = bin
