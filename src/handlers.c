@@ -144,7 +144,7 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
                     if (strlen(base_slug) == 0) {
                         generate_random_slug(slug, 6);
                     } else {
-                        strcpy(slug, base_slug);
+                        snprintf(slug, MAX_SLUG_LEN, "%s", base_slug);
                         is_custom = 1;
                     }
                 } else {
@@ -162,9 +162,10 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
                 int insert_res = insert_link(slug, target_url->valuestring, ttl, pwd);
                 if (insert_res != 0 && is_custom) {
                     for (int attempts = 0; attempts < 10; attempts++) {
-                        char suffix[6];
+                        char suffix[5];
                         generate_random_slug(suffix, 4);
-                        snprintf(slug, MAX_SLUG_LEN, "%.*s-%s", MAX_SLUG_LEN - 6, base_slug, suffix);
+                        int base_max = MAX_SLUG_LEN - 1 - 4 - 1; // room for '-' + suffix + null
+                        snprintf(slug, MAX_SLUG_LEN, "%.*s-%s", base_max, base_slug, suffix);
                         insert_res = insert_link(slug, target_url->valuestring, ttl, pwd);
                         if (insert_res == 0) break;
                     }
