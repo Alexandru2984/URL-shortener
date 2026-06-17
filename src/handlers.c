@@ -74,10 +74,14 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
 
     struct connection_info_struct *con_info = *con_cls;
 
-    // Extract IP for rate limiting
+    // Only trust X-Real-IP set by our NGINX from $remote_addr.
+    // Do NOT trust X-Forwarded-For — any client can set it to bypass rate limits.
     const char *ip_addr = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "X-Real-IP");
-    if (!ip_addr) ip_addr = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "X-Forwarded-For");
-    if (!ip_addr) ip_addr = "127.0.0.1";
+    if (!ip_addr) {
+        // Fallback to Cloudflare's connecting IP header
+        ip_addr = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "CF-Connecting-IP");
+    }
+    if (!ip_addr) ip_addr = "unknown";
 
     if (strcasecmp(method, "POST") == 0) {
         if (*upload_data_size != 0) {
