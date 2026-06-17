@@ -228,17 +228,11 @@ int get_stats(const char *slug, int *total_visits, int *unique_visits) {
 }
 
 int check_rate_limit(const char *ip, int max_requests_per_min) {
-    const char *sql_insert = "INSERT INTO rate_limit (ip) VALUES (?);";
-    sqlite3_stmt *res_insert;
-    if (sqlite3_prepare_v2(db, sql_insert, -1, &res_insert, 0) == SQLITE_OK) {
-        sqlite3_bind_text(res_insert, 1, ip, -1, SQLITE_STATIC);
-        sqlite3_step(res_insert);
-        sqlite3_finalize(res_insert);
-    }
-    
+    // Clean old entries first
     const char *sql_clean = "DELETE FROM rate_limit WHERE timestamp <= datetime('now', '-1 minute');";
     sqlite3_exec(db, sql_clean, 0, 0, NULL);
-    
+
+    // Check current count BEFORE inserting
     const char *sql_count = "SELECT COUNT(*) FROM rate_limit WHERE ip = ? AND timestamp > datetime('now', '-1 minute');";
     sqlite3_stmt *res_count;
     int count = 0;
@@ -249,9 +243,19 @@ int check_rate_limit(const char *ip, int max_requests_per_min) {
         }
         sqlite3_finalize(res_count);
     }
-    
-    if (count > max_requests_per_min) {
-        return -1; // Rate limit exceeded
+
+    if (count >= max_requests_per_min) {
+        return -1; // Rate limit exceeded — do NOT insert
     }
+
+    // Only record if under the limit
+    const char *sql_insert = "INSERT INTO rate_limit (ip) VALUES (?);";
+    sqlite3_stmt *res_insert;
+    if (sqlite3_prepare_v2(db, sql_insert, -1, &res_insert, 0) == SQLITE_OK) {
+        sqlite3_bind_text(res_insert, 1, ip, -1, SQLITE_STATIC);
+        sqlite3_step(res_insert);
+        sqlite3_finalize(res_insert);
+    }
+
     return 0; // OK
 }
