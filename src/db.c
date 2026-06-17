@@ -60,6 +60,10 @@ int init_db(const char *db_path) {
         return -1;
     }
 
+    // Create indexes for query performance
+    sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_visits_slug ON visits(slug);", 0, 0, NULL);
+    sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_rate_limit_ip_ts ON rate_limit(ip, timestamp);", 0, 0, NULL);
+
     return 0;
 }
 

@@ -225,6 +225,11 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
         const char *user_agent = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "User-Agent");
         if (!user_agent) user_agent = "Unknown";
 
+        // Health check endpoint for monitoring
+        if (strcmp(url, "/health") == 0) {
+            return send_json_response(connection, MHD_HTTP_OK, "{\"status\":\"ok\"}");
+        }
+
         if (strncmp(url, "/stats/", 7) == 0) {
             const char *slug = url + 7;
             if (strlen(slug) == 0) return send_error(connection, MHD_HTTP_BAD_REQUEST, "Missing slug");
@@ -250,6 +255,7 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
 
             struct MHD_Response *response = MHD_create_response_from_buffer(html_len, (void *)html_buf, MHD_RESPMEM_MUST_FREE);
             MHD_add_response_header(response, "Content-Type", "text/html; charset=utf-8");
+            add_security_headers(response);
             int ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
             MHD_destroy_response(response);
             return ret;
