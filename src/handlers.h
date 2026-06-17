@@ -8,4 +8,7 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
                                const char *version, const char *upload_data,
                                size_t *upload_data_size, void **con_cls);
 
+void request_completed(void *cls, struct MHD_Connection *connection,
+                       void **con_cls, enum MHD_RequestTerminationCode toe);
+
 #endif

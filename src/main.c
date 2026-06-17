@@ -11,10 +11,6 @@
 
 #define DEFAULT_PORT 8080
 
-// Declared in handlers.c
-extern void request_completed(void *cls, struct MHD_Connection *connection,
-                       void **con_cls, enum MHD_RequestTerminationCode toe);
-
 static volatile sig_atomic_t running = 1;
 
 static void signal_handler(int signum) {
