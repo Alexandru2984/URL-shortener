@@ -4,6 +4,8 @@
 #include "index_html.h"
 #include "password_html.h"
 #include "stats_html.h"
+#include "error_html.h"
+#include "admin_html.h"
 #include <cjson/cJSON.h>
 #include <string.h>
 #include <stdlib.h>
@@ -68,6 +70,25 @@ static int send_html(struct MHD_Connection *connection, int status_code, const c
     int ret = MHD_queue_response(connection, status_code, response);
     MHD_destroy_response(response);
     return ret;
+}
+
+static int send_html_dynamic(struct MHD_Connection *connection, int status_code, char *html) {
+    struct MHD_Response *response = MHD_create_response_from_buffer(strlen(html), (void *)html, MHD_RESPMEM_MUST_FREE);
+    MHD_add_response_header(response, "Content-Type", "text/html; charset=utf-8");
+    add_security_headers(response);
+    int ret = MHD_queue_response(connection, status_code, response);
+    MHD_destroy_response(response);
+    return ret;
+}
+
+static int send_error_page(struct MHD_Connection *connection, int code, const char *title, const char *desc) {
+    char page_title[128];
+    snprintf(page_title, sizeof(page_title), "%d — %s", code, title);
+    int len = snprintf(NULL, 0, ERROR_HTML_TEMPLATE, page_title, code, title, desc);
+    char *buf = malloc(len + 1);
+    if (!buf) return send_error(connection, code, title);
+    snprintf(buf, len + 1, ERROR_HTML_TEMPLATE, page_title, code, title, desc);
+    return send_html_dynamic(connection, code, buf);
 }
 
 enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
@@ -247,19 +268,63 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
             return send_json_response(connection, MHD_HTTP_OK, "{\"status\":\"ok\"}");
         }
 
+        // robots.txt
+        if (strcmp(url, "/robots.txt") == 0) {
+            const char *robots = "User-agent: *\nDisallow: /stats/\nDisallow: /admin\nDisallow: /api/\n";
+            struct MHD_Response *response = MHD_create_response_from_buffer(strlen(robots), (void *)robots, MHD_RESPMEM_PERSISTENT);
+            MHD_add_response_header(response, "Content-Type", "text/plain");
+            add_security_headers(response);
+            int ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
+            MHD_destroy_response(response);
+            return ret;
+        }
+
+        // favicon.ico — return 204 No Content
+        if (strcmp(url, "/favicon.ico") == 0) {
+            struct MHD_Response *response = MHD_create_response_from_buffer(0, "", MHD_RESPMEM_PERSISTENT);
+            add_security_headers(response);
+            int ret = MHD_queue_response(connection, MHD_HTTP_NO_CONTENT, response);
+            MHD_destroy_response(response);
+            return ret;
+        }
+
+        // Admin dashboard (HTML page)
+        if (strcmp(url, "/admin") == 0) {
+            if (!check_api_key(connection)) {
+                // Check query param ?key= as fallback for browser access
+                const char *key_param = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "key");
+                if (!key_param || !g_api_key || strcmp(key_param, g_api_key) != 0) {
+                    return send_error_page(connection, 401, "Unauthorized", "A valid API key is required to access the admin dashboard.");
+                }
+            }
+            return send_html(connection, MHD_HTTP_OK, ADMIN_HTML);
+        }
+
+        // Admin API: list all links
+        if (strcmp(url, "/api/admin/links") == 0) {
+            if (!check_api_key(connection)) {
+                return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
+            }
+            char *json_str = get_all_links_json();
+            if (!json_str) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "DB error");
+            int ret = send_json_response(connection, MHD_HTTP_OK, json_str);
+            free(json_str);
+            return ret;
+        }
+
         if (strncmp(url, "/stats/", 7) == 0) {
             const char *slug = url + 7;
-            if (strlen(slug) == 0) return send_error(connection, MHD_HTTP_BAD_REQUEST, "Missing slug");
+            if (strlen(slug) == 0) return send_error_page(connection, 400, "Bad Request", "Missing slug parameter.");
 
             if (check_rate_limit(ip_addr, 120) != 0) {
-                return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+                return send_error_page(connection, 429, "Too Many Requests", "You've made too many requests. Please wait a moment and try again.");
             }
 
             int req_pwd;
             char dummy[MAX_URL_LEN];
             int db_res = get_link(slug, dummy, sizeof(dummy), &req_pwd);
-            if (db_res == -1) return send_error(connection, MHD_HTTP_NOT_FOUND, "Slug not found");
-            if (db_res == -2) return send_error(connection, MHD_HTTP_GONE, "Link expired");
+            if (db_res == -1) return send_error_page(connection, 404, "Not Found", "This short link doesn't exist. It may have been deleted.");
+            if (db_res == -2) return send_error_page(connection, 410, "Link Expired", "This short link has expired and is no longer available.");
 
             int total, unique;
             get_stats(slug, &total, &unique);
@@ -289,9 +354,9 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
         int db_res = get_link(slug, target_url, sizeof(target_url), &req_pwd);
         
         if (db_res == -2) {
-             return send_error(connection, MHD_HTTP_GONE, "Link has expired");
+             return send_error_page(connection, 410, "Link Expired", "This short link has expired and is no longer available.");
         } else if (db_res == -1) {
-             return send_error(connection, MHD_HTTP_NOT_FOUND, "Slug not found");
+             return send_error_page(connection, 404, "Not Found", "This short link doesn't exist. It may have been deleted or never created.");
         }
 
         if (req_pwd) {
