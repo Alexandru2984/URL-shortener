@@ -15,6 +15,7 @@ RestartSec=5s
 UMask=0077
 
 StateDirectory=shortener
+StateDirectoryMode=0700
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
