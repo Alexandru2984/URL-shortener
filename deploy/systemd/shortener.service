@@ -15,7 +15,6 @@ RestartSec=5s
 UMask=0077
 
 StateDirectory=shortener
-LogsDirectory=shortener
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
@@ -40,9 +39,11 @@ IPAddressDeny=any
 IPAddressAllow=127.0.0.1/32
 IPAddressAllow=::1/128
 SystemCallArchitectures=native
+SystemCallFilter=~@clock @cpu-emulation @debug @module @mount @obsolete @privileged @raw-io @reboot @resources @swap
+SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadWritePaths=/var/lib/shortener /var/log/shortener
+ReadWritePaths=/var/lib/shortener
 
 [Install]
 WantedBy=multi-user.target

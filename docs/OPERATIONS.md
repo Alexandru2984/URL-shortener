@@ -28,9 +28,9 @@ Create a dedicated `shortener` service user and install the binary at
 `/var/lib/shortener`, outside the release directory. Use a system account with
 no login shell, make `/opt/shortener` root-owned and immutable to the service,
 then migrate the database with SQLite's `.backup` command while the old service
-is stopped. Give the service account ownership only of `/var/lib/shortener` and
-`/var/log/shortener`; keep `/etc/shortener` and its secret files root-owned and
-group-readable only by `shortener`.
+is stopped. Give the service account ownership only of `/var/lib/shortener`
+(including its `logs/` directory); keep `/etc/shortener` and its secret files
+root-owned and group-readable only by `shortener`.
 
 For the current checkout-based deployment, use
 `deploy/systemd/shortener.in-place.service` first. It removes secrets from the
