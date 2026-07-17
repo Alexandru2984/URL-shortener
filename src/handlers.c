@@ -22,7 +22,6 @@
 #define MAX_SLUG_LENGTH (MAX_SLUG_LEN - 1U)
 #define MAX_PASSWORD_LEN 128U
 #define MAX_REQUEST_BODY 8192U
-#define MAX_USER_AGENT_LEN 512U
 #define MAX_TTL_HOURS 8760
 #define MAX_FULL_URL_LEN 512U
 
@@ -404,17 +403,6 @@ static int handle_unlock(struct MHD_Connection *connection, const char *client_i
     return ret;
 }
 
-static int copy_user_agent(struct MHD_Connection *connection, char *output, size_t output_len) {
-    const char *user_agent = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "User-Agent");
-    if (!user_agent) user_agent = "Unknown";
-
-    size_t len = strnlen(user_agent, output_len);
-    if (len >= output_len) len = output_len - 1U;
-    memcpy(output, user_agent, len);
-    output[len] = '\0';
-    return 0;
-}
-
 static int handle_get(struct MHD_Connection *connection, const char *url, const char *client_ip) {
     if (strcmp(url, "/health") == 0) {
         return send_json_response(connection, MHD_HTTP_OK, "{\"status\":\"ok\"}");
@@ -507,9 +495,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         return send_error_page(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Unavailable", "This link cannot be redirected safely.");
     }
 
-    char user_agent[MAX_USER_AGENT_LEN + 1U];
-    copy_user_agent(connection, user_agent, sizeof(user_agent));
-    if (record_visit(slug, client_ip, user_agent) != 0) {
+    if (record_visit(slug, client_ip) != 0) {
         log_error("Could not record visit for %s", slug);
     }
     log_message("Redirected short link: %s", slug);

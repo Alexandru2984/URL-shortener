@@ -1,42 +1,64 @@
 # C URL Shortener
 
-A high-performance, lightweight, production-ready URL shortener built in C.
+A compact URL shortener written in C, using libmicrohttpd and SQLite. It serves
+its responsive browser UI directly from the binary and is intended to run behind
+an NGINX TLS reverse proxy.
 
-## Features
-- **Fast HTTP Server**: Powered by `libmicrohttpd`.
-- **Persistent Storage**: Backed by `SQLite`.
-- **Custom Slugs**: Supports both auto-generated (base62) and custom short links.
-- **Analytics**: Tracks total visits and unique IP visitors per link.
-- **Rate Limiting**: Protects endpoints from IP-based spam/abuse.
-- **Secure**: Checks payload size, validates inputs, and uses parameterized DB queries.
-- **Dynamic Port Selection**: Automatically binds to the next available port starting from 8080 if occupied.
-- **HTML Frontend**: Includes a minimal, responsive web UI for creating links right from the browser.
+## Capabilities
 
-## Deployment Environment
-- **Domain**: c.micutu.com
-- **OS**: Ubuntu Linux (headless VPS)
-- **Reverse Proxy**: NGINX with Let's Encrypt SSL/TLS.
-- **Daemon**: Managed by `systemd`.
+- Cryptographically generated short slugs and optional custom slugs
+- Optional expiration and password-protected links
+- PBKDF2-HMAC-SHA-256 password storage with migration of legacy plaintext rows
+- Privacy-preserving visit/unique-visitor counters (HMAC identifiers, no stored user agents), protected routes and an in-memory admin UI
+- SQLite WAL, transactional deletion/expiry cleanup and prepared SQL statements
+- IP-based application rate limits plus NGINX edge rate-limit templates
+- Health endpoint, graceful shutdown and hardened compiler/linker settings
 
-## API Endpoints
-- **`POST /shorten`**
-  - **Body**: `{"url": "https://example.com", "custom_slug": "optional"}`
-  - **Response**: `{"short_url": "https://c.micutu.com/..."}`
+## API
 
-- **`GET /<slug>`**
-  - Redirects to the previously shortened target URL. Returns a `302 Found`.
+`API_KEY` or `API_KEY_FILE` is required for write/admin operations. Send it only
+in the `X-API-Key` request header; never place it in a URL.
 
-- **`GET /stats/<slug>`**
-  - **Response**: `{"total_visits": 5, "unique_visitors": 2}`
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /shorten` | Create a link from JSON: `url`, optional `custom_slug`, `password`, `ttl_hours` |
+| `GET /<slug>` | Redirect to a target, or display the password form |
+| `POST /unlock/<slug>` | Unlock a password-protected link with JSON `{ "password": "..." }` |
+| `GET /stats/<slug>` | Show aggregate link statistics |
+| `DELETE /<slug>` | Delete a link and its visit records (API key required) |
+| `GET /admin` | Open the dashboard; the key remains only in page memory |
+| `GET /api/admin/links` | List up to 1000 links (API key required) |
+| `GET /health` | Health check |
 
-- **`GET /`**
-  - Interactive HTML interface for generating short links.
+Only `http://` and `https://` redirect targets are accepted. URL credentials,
+control characters and unsafe custom-slug characters are rejected.
 
-## Building and Running
-1. `make` to compile the `bin/shortener` executable.
-2. `make clean` to clean up object and binary files.
-3. Start the service with `sudo systemctl start shortener`.
-4. Ensure NGINX configuration inside `/etc/nginx/sites-enabled/shortener` is valid and points to the internally assigned port.
+## Build and verification
 
-## Author
-Senior Systems Engineer / DevOps
+Install development packages for libmicrohttpd, SQLite, cJSON and OpenSSL, then:
+
+```sh
+make
+make test
+make check
+make sanitize
+```
+
+`make check` runs the C tests and cppcheck. `make sanitize` builds an AddressSanitizer
+and UndefinedBehaviorSanitizer binary at `bin/shortener-asan`.
+
+## Production configuration
+
+The service defaults to `127.0.0.1:8080`; configure the actual listener through
+`PORT` and `BIND_ADDRESS`. Use `BASE_URL` without a trailing slash. For production,
+prefer `API_KEY_FILE=/etc/shortener/api_key` over an environment variable. Set
+`ANALYTICS_HMAC_KEY_FILE` to a separate stable secret so unique-visitor metrics
+do not retain raw visitor addresses.
+
+Deployment templates and the ordered rollout checklist live in
+[docs/OPERATIONS.md](docs/OPERATIONS.md). NGINX rate-limit/proxy snippets are in
+`deploy/nginx/`, while the systemd unit and public configuration example are in
+`deploy/systemd/`.
+
+The proposed security and feature backlog is maintained in
+[docs/ROADMAP.md](docs/ROADMAP.md).

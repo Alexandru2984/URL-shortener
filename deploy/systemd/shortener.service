@@ -1,0 +1,43 @@
+[Unit]
+Description=C URL Shortener Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=shortener
+Group=shortener
+WorkingDirectory=/var/lib/shortener
+EnvironmentFile=/etc/shortener/shortener.env
+ExecStart=/opt/shortener/bin/shortener
+Restart=on-failure
+RestartSec=5s
+UMask=0027
+
+StateDirectory=shortener
+LogsDirectory=shortener
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictNamespaces=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/shortener /var/log/shortener
+
+[Install]
+WantedBy=multi-user.target

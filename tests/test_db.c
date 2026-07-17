@@ -60,12 +60,14 @@ int main(void) {
     CHECK(sqlite3_exec(legacy_db,
                        "CREATE TABLE links (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT UNIQUE NOT NULL, "
                        "url TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, expires_at DATETIME, password TEXT);"
-                       "INSERT INTO links (slug, url, password) VALUES ('legacy', 'https://example.test/legacy', 'old-password');",
+                       "CREATE TABLE visits (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, ip TEXT, user_agent TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);"
+                       "INSERT INTO links (slug, url, password) VALUES ('legacy', 'https://example.test/legacy', 'old-password');"
+                       "INSERT INTO visits (slug, ip, user_agent) VALUES ('legacy', '198.51.100.10', 'legacy-agent');",
                        NULL, NULL, NULL) == SQLITE_OK);
     CHECK(sqlite3_close(legacy_db) == SQLITE_OK);
 
     CHECK(chdir(directory) == 0);
-    CHECK(init_db("data/shortener.db") == 0);
+    CHECK(init_db("data/shortener.db", "test-analytics-hmac-key") == 0);
 
     char target[2049];
     CHECK(get_link_with_password("legacy", "old-password", target, sizeof(target)) == 0);
@@ -79,6 +81,14 @@ int main(void) {
     CHECK(strncmp((const char *)stored_password, "pbkdf2-sha256$600000$", 20U) == 0);
     sqlite3_finalize(statement);
 
+    CHECK(sqlite3_prepare_v2(db, "SELECT ip, user_agent FROM visits WHERE slug = 'legacy';", -1, &statement, NULL) == SQLITE_OK);
+    CHECK(sqlite3_step(statement) == SQLITE_ROW);
+    const unsigned char *stored_ip = sqlite3_column_text(statement, 0);
+    CHECK(stored_ip != NULL);
+    CHECK(strncmp((const char *)stored_ip, "hmac-sha256:v1:", 15U) == 0);
+    CHECK(sqlite3_column_type(statement, 1) == SQLITE_NULL);
+    sqlite3_finalize(statement);
+
     CHECK(insert_link("new-link", "https://example.test/new", 0, "new-password") == 0);
     int requires_password = 0;
     CHECK(get_link("new-link", target, sizeof(target), &requires_password) == 0);
@@ -86,8 +96,8 @@ int main(void) {
     CHECK(get_link_with_password("new-link", "new-password", target, sizeof(target)) == 0);
     CHECK(get_link_with_password("new-link", "wrong-password", target, sizeof(target)) == -4);
 
-    CHECK(record_visit("new-link", "127.0.0.1", "test-agent") == 0);
-    CHECK(record_visit("new-link", "127.0.0.1", "test-agent") == 0);
+    CHECK(record_visit("new-link", "127.0.0.1") == 0);
+    CHECK(record_visit("new-link", "127.0.0.1") == 0);
     int total = 0;
     int unique = 0;
     CHECK(get_stats("new-link", &total, &unique) == 0);

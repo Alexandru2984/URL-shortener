@@ -2,6 +2,7 @@
 #include "utils.h"
 #include <cjson/cJSON.h>
 #include <limits.h>
+#include <openssl/hmac.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +13,34 @@ sqlite3 *db = NULL;
 
 static pthread_mutex_t rate_cleanup_mutex = PTHREAD_MUTEX_INITIALIZER;
 static time_t last_rate_cleanup = 0;
+static const char *analytics_hmac_key = NULL;
+
+#define ANALYTICS_HASH_PREFIX "hmac-sha256:v1:"
+#define ANALYTICS_HASH_LEN 80U
+
+static int hash_visitor_ip(const char *ip, char *hash_out, size_t hash_out_len) {
+    if (!analytics_hmac_key || !analytics_hmac_key[0] || !ip || !ip[0] ||
+        hash_out_len < ANALYTICS_HASH_LEN || strlen(analytics_hmac_key) > (size_t)INT_MAX) {
+        return -1;
+    }
+
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int digest_len = 0;
+    if (!HMAC(EVP_sha256(), analytics_hmac_key, (int)strlen(analytics_hmac_key),
+              (const unsigned char *)ip, strlen(ip), digest, &digest_len) || digest_len != 32U) {
+        return -1;
+    }
+
+    static const char hex[] = "0123456789abcdef";
+    const size_t prefix_len = sizeof(ANALYTICS_HASH_PREFIX) - 1U;
+    memcpy(hash_out, ANALYTICS_HASH_PREFIX, prefix_len);
+    for (size_t i = 0; i < digest_len; i++) {
+        hash_out[prefix_len + i * 2U] = hex[digest[i] >> 4U];
+        hash_out[prefix_len + i * 2U + 1U] = hex[digest[i] & 0x0fU];
+    }
+    hash_out[prefix_len + digest_len * 2U] = '\0';
+    return 0;
+}
 
 static int exec_sql(const char *label, const char *sql) {
     char *error_message = NULL;
@@ -129,7 +158,67 @@ static int migrate_plaintext_passwords(void) {
     return 0;
 }
 
-int init_db(const char *db_path) {
+static int anonymize_existing_visits(void) {
+    static const char select_sql[] =
+        "SELECT id, ip FROM visits WHERE ip IS NOT NULL AND ip NOT LIKE '" ANALYTICS_HASH_PREFIX "%';";
+    static const char update_sql[] = "UPDATE visits SET ip = ?, user_agent = NULL WHERE id = ?;";
+    sqlite3_stmt *select_statement = NULL;
+    sqlite3_stmt *update_statement = NULL;
+    int migrated = 0;
+
+    if (exec_sql("begin analytics migration", "BEGIN IMMEDIATE;") != 0) return -1;
+    if (sqlite3_prepare_v2(db, select_sql, -1, &select_statement, NULL) != SQLITE_OK ||
+        sqlite3_prepare_v2(db, update_sql, -1, &update_statement, NULL) != SQLITE_OK) {
+        log_error("Could not prepare analytics migration: %s", sqlite3_errmsg(db));
+        sqlite3_finalize(select_statement);
+        sqlite3_finalize(update_statement);
+        exec_sql("rollback analytics migration", "ROLLBACK;");
+        return -1;
+    }
+
+    int rc;
+    while ((rc = sqlite3_step(select_statement)) == SQLITE_ROW) {
+        sqlite3_int64 id = sqlite3_column_int64(select_statement, 0);
+        const unsigned char *stored_ip = sqlite3_column_text(select_statement, 1);
+        char ip_hash[ANALYTICS_HASH_LEN];
+        const char *replacement = NULL;
+        if (stored_ip && hash_visitor_ip((const char *)stored_ip, ip_hash, sizeof(ip_hash)) == 0) {
+            replacement = ip_hash;
+        }
+
+        sqlite3_reset(update_statement);
+        sqlite3_clear_bindings(update_statement);
+        if (replacement) sqlite3_bind_text(update_statement, 1, replacement, -1, SQLITE_TRANSIENT);
+        else sqlite3_bind_null(update_statement, 1);
+        sqlite3_bind_int64(update_statement, 2, id);
+        if (sqlite3_step(update_statement) != SQLITE_DONE) {
+            log_error("Could not anonymize an analytics row: %s", sqlite3_errmsg(db));
+            sqlite3_finalize(select_statement);
+            sqlite3_finalize(update_statement);
+            exec_sql("rollback analytics migration", "ROLLBACK;");
+            return -1;
+        }
+        migrated++;
+    }
+    sqlite3_finalize(select_statement);
+    sqlite3_finalize(update_statement);
+    if (rc != SQLITE_DONE ||
+        exec_sql("clear stored user agents", "UPDATE visits SET user_agent = NULL WHERE user_agent IS NOT NULL;") != 0 ||
+        exec_sql("commit analytics migration", "COMMIT;") != 0) {
+        exec_sql("rollback analytics migration", "ROLLBACK;");
+        return -1;
+    }
+
+    if (migrated > 0) {
+        log_message("Anonymized %d stored visitor identifier(s)", migrated);
+    }
+    if (!analytics_hmac_key || !analytics_hmac_key[0]) {
+        log_error("ANALYTICS_HMAC_KEY is not configured; unique visitor counts will be unavailable");
+    }
+    return 0;
+}
+
+int init_db(const char *db_path, const char *analytics_key) {
     if (!db_path || !db_path[0]) return -1;
 
     int open_flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX;
@@ -141,6 +230,7 @@ int init_db(const char *db_path) {
     sqlite3_extended_result_codes(db, 1);
     sqlite3_busy_timeout(db, 5000);
     sqlite3_db_config(db, SQLITE_DBCONFIG_DEFENSIVE, 1, NULL);
+    analytics_hmac_key = analytics_key;
 
     if (exec_sql("enable WAL", "PRAGMA journal_mode=WAL;") != 0 ||
         exec_sql("set synchronous mode", "PRAGMA synchronous=NORMAL;") != 0 ||
@@ -180,7 +270,8 @@ int init_db(const char *db_path) {
         exec_sql("create visits index", "CREATE INDEX IF NOT EXISTS idx_visits_slug ON visits(slug);") != 0 ||
         exec_sql("create rate limit index", "CREATE INDEX IF NOT EXISTS idx_rate_limit_ip_ts ON rate_limit(ip, timestamp);") != 0 ||
         exec_sql("create expiration index", "CREATE INDEX IF NOT EXISTS idx_links_expires_at ON links(expires_at);") != 0 ||
-        migrate_plaintext_passwords() != 0) {
+        migrate_plaintext_passwords() != 0 ||
+        anonymize_existing_visits() != 0) {
         close_db();
         return -1;
     }
@@ -322,13 +413,16 @@ int get_link_with_password(const char *slug, const char *password_in,
     return result;
 }
 
-int record_visit(const char *slug, const char *ip, const char *user_agent) {
-    static const char sql[] = "INSERT INTO visits (slug, ip, user_agent) VALUES (?, ?, ?);";
+int record_visit(const char *slug, const char *ip) {
+    static const char sql[] = "INSERT INTO visits (slug, ip) VALUES (?, ?);";
     sqlite3_stmt *statement = NULL;
     if (sqlite3_prepare_v2(db, sql, -1, &statement, NULL) != SQLITE_OK) return -1;
+    char ip_hash[ANALYTICS_HASH_LEN];
+    const char *stored_ip = NULL;
+    if (hash_visitor_ip(ip, ip_hash, sizeof(ip_hash)) == 0) stored_ip = ip_hash;
     sqlite3_bind_text(statement, 1, slug, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(statement, 2, ip, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(statement, 3, user_agent, -1, SQLITE_TRANSIENT);
+    if (stored_ip) sqlite3_bind_text(statement, 2, stored_ip, -1, SQLITE_TRANSIENT);
+    else sqlite3_bind_null(statement, 2);
     int rc = sqlite3_step(statement);
     sqlite3_finalize(statement);
     return rc == SQLITE_DONE ? 0 : -1;
