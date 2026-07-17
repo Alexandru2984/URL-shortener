@@ -25,7 +25,12 @@ sudo install -m 0640 -o root -g shortener deploy/systemd/shortener.env.example /
 
 Create a dedicated `shortener` service user and install the binary at
 `/opt/shortener/bin/shortener`. The unit template keeps mutable SQLite data in
-`/var/lib/shortener`, outside the release directory.
+`/var/lib/shortener`, outside the release directory. Use a system account with
+no login shell, make `/opt/shortener` root-owned and immutable to the service,
+then migrate the database with SQLite's `.backup` command while the old service
+is stopped. Give the service account ownership only of `/var/lib/shortener` and
+`/var/log/shortener`; keep `/etc/shortener` and its secret files root-owned and
+group-readable only by `shortener`.
 
 For the current checkout-based deployment, use
 `deploy/systemd/shortener.in-place.service` first. It removes secrets from the
@@ -47,6 +52,9 @@ template on the next release migration.
    `https://c.micutu.com/health`.
 6. Confirm the service listens only on loopback with `ss -lntp` and verify
    there is exactly one value for each security response header.
+7. After moving to the dedicated-service unit, run
+   `systemd-analyze security shortener` and keep the runtime state out of the
+   checkout and home directory.
 
 The API key previously lived in a readable unit file. Rotate it during the
 rollout, then update every legitimate client key once. Do not place the new key
