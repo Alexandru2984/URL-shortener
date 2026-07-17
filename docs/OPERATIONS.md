@@ -23,6 +23,11 @@ Create a dedicated `shortener` service user and install the binary at
 `/opt/shortener/bin/shortener`. The unit template keeps mutable SQLite data in
 `/var/lib/shortener`, outside the release directory.
 
+For the current checkout-based deployment, use
+`deploy/systemd/shortener.in-place.service` first. It removes secrets from the
+unit while retaining the existing user and paths; move to the dedicated-service
+template on the next release migration.
+
 ## Rollout checklist
 
 1. Run `make check && make sanitize && make` from the release checkout.
