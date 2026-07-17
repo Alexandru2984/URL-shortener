@@ -14,6 +14,10 @@ data/
 
 # Object files
 *.o
+*.d
+
+# Local build and test artifacts
+build/
 
 # OS junk
 .DS_Store
