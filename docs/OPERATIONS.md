@@ -2,7 +2,11 @@
 
 The application binds to `127.0.0.1` by default. NGINX is the only public edge;
 Cloudflare should proxy to that edge and NGINX must have its Cloudflare real-IP
-configuration enabled before applying request limits.
+configuration enabled before applying request limits. The supplied vhost also
+requires a global `$from_cloudflare_origin` map that accepts only Cloudflare
+TCP ranges (and loopback for local health checks); this prevents direct-to-origin
+requests and forged `CF-Connecting-IP` values. Keep the Cloudflare ranges
+current.
 
 ## Configuration
 
@@ -36,6 +40,8 @@ template on the next release migration.
 3. Install the systemd and NGINX templates. Install
    `deploy/nginx/shortener-rate-limit.conf` in NGINX's `http` context and
    `deploy/nginx/shortener-proxy.conf` as `/etc/nginx/snippets/shortener-proxy.conf`.
+   Confirm that the Cloudflare real-IP and origin-guard maps are loaded in the
+   NGINX `http` context before installing the vhost.
 4. Run `sudo nginx -t` and `sudo systemctl daemon-reload` before any reload.
 5. Restart `shortener`, then validate both `http://127.0.0.1:8086/health` and
    `https://c.micutu.com/health`.
