@@ -10,13 +10,16 @@
 #include <ctype.h>
 #include <pthread.h>
 #include <openssl/evp.h>
+#include <strings.h>
 
 void slugify(const char *input, char *output, int max_len) {
+    if (!input || !output || max_len < 1) return;
+
     int i = 0, j = 0;
     while (input[i] && j < max_len - 1) {
         char c = input[i];
         if (isalnum((unsigned char)c)) {
-            output[j++] = tolower((unsigned char)c);
+            output[j++] = (char)tolower((unsigned char)c);
         } else if (c == ' ' || c == '-' || c == '_') {
             if (j > 0 && output[j-1] != '-') {
                 output[j++] = '-';
@@ -26,6 +29,57 @@ void slugify(const char *input, char *output, int max_len) {
     }
     if (j > 0 && output[j-1] == '-') j--;
     output[j] = '\0';
+}
+
+int is_valid_slug(const char *slug, size_t max_len) {
+    if (!slug || max_len == 0) return 0;
+
+    size_t len = strnlen(slug, max_len + 1);
+    if (len == 0 || len > max_len || slug[0] == '-' || slug[len - 1] == '-') return 0;
+
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)slug[i];
+        if (!isalnum(c) && c != '-') return 0;
+    }
+    return 1;
+}
+
+int is_valid_http_url(const char *url, size_t max_len) {
+    if (!url || max_len == 0) return 0;
+
+    size_t len = strnlen(url, max_len + 1);
+    if (len == 0 || len > max_len) return 0;
+
+    size_t scheme_len;
+    if (strncasecmp(url, "https://", 8) == 0) {
+        scheme_len = 8;
+    } else if (strncasecmp(url, "http://", 7) == 0) {
+        scheme_len = 7;
+    } else {
+        return 0;
+    }
+
+    size_t authority_end = scheme_len;
+    while (authority_end < len && url[authority_end] != '/' &&
+           url[authority_end] != '?' && url[authority_end] != '#') {
+        authority_end++;
+    }
+    if (authority_end == scheme_len) return 0;
+
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)url[i];
+        if (c <= 0x20 || c == 0x7f || c > 0x7e || c == '\\' ||
+            c == '"' || c == '\'' || c == '<' || c == '>') {
+            return 0;
+        }
+    }
+
+    // Credentials in a redirect target are both a phishing risk and rarely useful.
+    for (size_t i = scheme_len; i < authority_end; i++) {
+        if (url[i] == '@') return 0;
+    }
+
+    return 1;
 }
 
 void generate_random_slug(char *slug_out, int len) {

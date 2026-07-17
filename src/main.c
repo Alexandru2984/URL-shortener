@@ -21,6 +21,7 @@
 #define CONNECTION_LIMIT 256U
 #define PER_IP_CONNECTION_LIMIT 32U
 #define CONNECTION_TIMEOUT_SECONDS 15U
+#define MAX_BASE_URL_LEN 400U
 
 // Defined in handlers.c
 extern const char *g_api_key;
@@ -120,6 +121,13 @@ int main(void) {
     g_api_key = getenv("API_KEY");
     const char *base_url_env = getenv("BASE_URL");
     if (base_url_env && base_url_env[0]) {
+        size_t base_url_len = strnlen(base_url_env, MAX_BASE_URL_LEN + 1U);
+        if (base_url_len > MAX_BASE_URL_LEN || base_url_env[base_url_len - 1U] == '/' ||
+            !is_valid_http_url(base_url_env, MAX_BASE_URL_LEN)) {
+            fprintf(stderr, "Invalid BASE_URL value\n");
+            close_db();
+            return 1;
+        }
         g_base_url = base_url_env;
     }
 
@@ -132,7 +140,10 @@ int main(void) {
     log_message("Starting server...");
     log_message("Listen: %s:%u | Base URL: %s | API Key: %s",
                 bind_address, (unsigned int)port, g_base_url,
-                (g_api_key && g_api_key[0]) ? "configured" : "disabled (open access)");
+                (g_api_key && g_api_key[0]) ? "configured" : "not configured (write endpoints disabled)");
+    if (g_api_key && g_api_key[0] && strnlen(g_api_key, 33U) < 32U) {
+        log_error("API_KEY is shorter than 32 characters; rotate it for a stronger secret");
+    }
 
     struct MHD_Daemon *daemon;
 

@@ -5,6 +5,8 @@
 
 void generate_random_slug(char *slug_out, int len);
 void slugify(const char *input, char *output, int max_len);
+int is_valid_http_url(const char *url, size_t max_len);
+int is_valid_slug(const char *slug, size_t max_len);
 void log_message(const char *format, ...);
 void log_error(const char *format, ...);
 int is_port_in_use(int port);
