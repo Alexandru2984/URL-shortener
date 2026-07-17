@@ -155,12 +155,12 @@ static int send_error_page(struct MHD_Connection *connection, unsigned int code,
         return send_error(connection, code, "Request failed");
     }
 
-    int html_len = snprintf(NULL, 0, ERROR_HTML_TEMPLATE, page_title, code, title, desc);
+    int html_len = snprintf(NULL, 0, ERROR_HTML_TEMPLATE, page_title, (int)code, title, desc);
     if (html_len < 0) return send_error(connection, code, "Request failed");
 
     char *html = malloc((size_t)html_len + 1U);
     if (!html) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Memory error");
-    snprintf(html, (size_t)html_len + 1U, ERROR_HTML_TEMPLATE, page_title, code, title, desc);
+    snprintf(html, (size_t)html_len + 1U, ERROR_HTML_TEMPLATE, page_title, (int)code, title, desc);
     return send_html_dynamic(connection, code, html);
 }
 
@@ -327,7 +327,10 @@ static int handle_shorten(struct MHD_Connection *connection, const char *client_
     int insert_result = -1;
     int attempts = custom_slug_requested ? 1 : 5;
     for (int attempt = 0; attempt < attempts; attempt++) {
-        if (!custom_slug_requested) generate_random_slug(slug, 8);
+        if (!custom_slug_requested && generate_random_slug(slug, 8U) != 0) {
+            log_error("Secure random generator failed while creating a slug");
+            return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Could not allocate a secure slug");
+        }
         insert_result = insert_link(slug, target_url->valuestring, ttl_hours, password);
         if (insert_result == 0) break;
     }
@@ -380,7 +383,7 @@ static int handle_unlock(struct MHD_Connection *connection, const char *client_i
 
     char target_url[MAX_URL_BUFFER];
     int db_result = get_link_with_password(slug, password->valuestring,
-                                           target_url, (int)sizeof(target_url));
+                                           target_url, sizeof(target_url));
     if (db_result == -2) return send_error(connection, MHD_HTTP_GONE, "Link expired");
     if (db_result == -4) return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Wrong password");
     if (db_result != 0 || !is_valid_http_url(target_url, MAX_URL_LEN)) {
@@ -461,7 +464,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
 
         int requires_password = 0;
         char ignored_url[MAX_URL_BUFFER];
-        int db_result = get_link(slug, ignored_url, (int)sizeof(ignored_url), &requires_password);
+        int db_result = get_link(slug, ignored_url, sizeof(ignored_url), &requires_password);
         if (db_result == -1) return send_error_page(connection, MHD_HTTP_NOT_FOUND, "Not Found", "This short link does not exist.");
         if (db_result == -2) return send_error_page(connection, MHD_HTTP_GONE, "Link Expired", "This short link has expired.");
 
@@ -490,7 +493,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
 
     char target_url[MAX_URL_BUFFER];
     int requires_password = 0;
-    int db_result = get_link(slug, target_url, (int)sizeof(target_url), &requires_password);
+    int db_result = get_link(slug, target_url, sizeof(target_url), &requires_password);
     if (db_result == -2) {
         return send_error_page(connection, MHD_HTTP_GONE, "Link Expired", "This short link has expired.");
     }
