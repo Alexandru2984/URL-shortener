@@ -20,7 +20,7 @@
 "  <main>\n" \
 "    <section class=\"panel narrow\" id=\"authPanel\" aria-labelledby=\"authTitle\">\n" \
 "      <h1 id=\"authTitle\">Unlock Admin Dashboard</h1>\n" \
-"      <p class=\"hint\">Enter the master Admin API key to manage links, issue scoped creator tokens, and inspect security audit logs.</p>\n" \
+"      <p class=\"hint\">Enter the master Admin API key to manage links, issue scoped creator tokens, inspect security audit logs, and view live C runtime telemetry.</p>\n" \
 "      <form id=\"authForm\">\n" \
 "        <div class=\"field\">\n" \
 "          <label for=\"apiKey\">Master API Key</label>\n" \
@@ -41,6 +41,7 @@
 "        <button type=\"button\" class=\"tab-btn active\" data-admin-tab=\"links\">Links &amp; Controls</button>\n" \
 "        <button type=\"button\" class=\"tab-btn\" data-admin-tab=\"tokens\">Scoped Creator Tokens</button>\n" \
 "        <button type=\"button\" class=\"tab-btn\" data-admin-tab=\"audit\">Security Audit Log</button>\n" \
+"        <button type=\"button\" class=\"tab-btn\" data-admin-tab=\"system\">System &amp; Metrics</button>\n" \
 "      </div>\n" \
 "      <p class=\"hint\" id=\"dashboardStatus\" aria-live=\"polite\"></p>\n" \
 "      <div data-admin-pane=\"links\">\n" \
@@ -71,7 +72,7 @@
 "      <div data-admin-pane=\"tokens\" hidden>\n" \
 "        <div class=\"panel\">\n" \
 "          <h2>Create Scoped Creator Token</h2>\n" \
-"          <p class=\"hint\">Creator tokens (<code>csh_...</code>) can only call <code>POST /shorten</code> and cannot read, edit, or delete existing links.</p>\n" \
+"          <p class=\"hint\">Creator tokens (<code>csh_...</code>) can only call <code>POST /shorten</code> and <code>POST /api/bulk/shorten</code>, and cannot read, edit, or delete existing links.</p>\n" \
 "          <form id=\"tokenForm\" class=\"row-3\">\n" \
 "            <div class=\"field\"><label for=\"tokenName\">Token Label</label><input id=\"tokenName\" type=\"text\" placeholder=\"e.g. Marketing Bot, Mobile App\" required></div>\n" \
 "            <div class=\"field\"><label for=\"tokenTtl\">Expiry (days, optional)</label><input id=\"tokenTtl\" type=\"number\" min=\"1\" max=\"3650\" placeholder=\"Never expires\"></div>\n" \
@@ -94,6 +95,16 @@
 "          </table>\n" \
 "        </div>\n" \
 "      </div>\n" \
+"      <div data-admin-pane=\"system\" hidden>\n" \
+"        <div class=\"panel\">\n" \
+"          <h2>C17 Engine &amp; SQLite Diagnostics</h2>\n" \
+"          <div id=\"systemGrid\"></div>\n" \
+"        </div>\n" \
+"        <div class=\"panel\">\n" \
+"          <h2>Prometheus Exporter (<code>GET /metrics</code>)</h2>\n" \
+"          <pre id=\"prometheusBox\">Loading metrics...</pre>\n" \
+"        </div>\n" \
+"      </div>\n" \
 "    </section>\n" \
 "    <div id=\"editModal\" class=\"modal-backdrop\" hidden>\n" \
 "      <div class=\"modal\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"editModalTitle\">\n" \
@@ -101,6 +112,7 @@
 "        <form id=\"editForm\">\n" \
 "          <input id=\"editSlug\" type=\"hidden\">\n" \
 "          <div class=\"field\"><label for=\"editUrl\">Destination URL</label><input id=\"editUrl\" type=\"url\" required></div>\n" \
+"          <div class=\"field\"><label for=\"editMobileUrl\">Mobile Destination URL (optional)</label><input id=\"editMobileUrl\" type=\"url\" placeholder=\"https://m.example.com\"></div>\n" \
 "          <div class=\"row\">\n" \
 "            <div class=\"field\"><label for=\"editTitle\">Title / Note</label><input id=\"editTitle\" type=\"text\"></div>\n" \
 "            <div class=\"field\"><label for=\"editTags\">Tags</label><input id=\"editTags\" type=\"text\" placeholder=\"work,promo\"></div>\n" \

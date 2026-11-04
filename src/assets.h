@@ -619,7 +619,12 @@
 "      qrBtn.href = '/qr/' + encodeURIComponent(slug) + '.svg';\n" \
 "      qrBtn.download = slug + '-qr.svg';\n" \
 "      qrBtn.textContent = 'Download QR SVG';\n" \
-"      actions.append(stats, inspect, qrBtn);\n" \
+"      const cardBtn = document.createElement('a');\n" \
+"      cardBtn.className = 'btn btn-sm';\n" \
+"      cardBtn.href = '/p/' + encodeURIComponent(slug);\n" \
+"      cardBtn.target = '_blank';\n" \
+"      cardBtn.textContent = 'Social Card';\n" \
+"      actions.append(stats, inspect, qrBtn, cardBtn);\n" \
 "    }\n" \
 "    left.append(label, link, actions);\n" \
 "    grid.append(left);\n" \
@@ -655,6 +660,10 @@
 "      const slug = byId('slug').value.trim();\n" \
 "      const title = byId('title') ? byId('title').value.trim() : '';\n" \
 "      const tags = byId('tags') ? byId('tags').value.trim() : '';\n" \
+"      const mobileUrl = byId('mobileUrl') ? byId('mobileUrl').value.trim() : '';\n" \
+"      const utmSource = byId('utmSource') ? byId('utmSource').value.trim() : '';\n" \
+"      const utmMedium = byId('utmMedium') ? byId('utmMedium').value.trim() : '';\n" \
+"      const utmCampaign = byId('utmCampaign') ? byId('utmCampaign').value.trim() : '';\n" \
 "      const password = byId('password').value;\n" \
 "      const ttlText = byId('ttl').value;\n" \
 "      const maxClicksText = byId('maxClicks') ? byId('maxClicks').value : '';\n" \
@@ -676,6 +685,10 @@
 "      if (slug) payload.custom_slug = slug;\n" \
 "      if (title) payload.title = title;\n" \
 "      if (tags) payload.tags = tags;\n" \
+"      if (mobileUrl) payload.mobile_url = mobileUrl;\n" \
+"      if (utmSource) payload.utm_source = utmSource;\n" \
+"      if (utmMedium) payload.utm_medium = utmMedium;\n" \
+"      if (utmCampaign) payload.utm_campaign = utmCampaign;\n" \
 "      if (password) payload.password = password;\n" \
 "      if (ttlText) payload.ttl_hours = Number(ttlText);\n" \
 "      if (maxClicksText) payload.max_clicks = Number(maxClicksText);\n" \
@@ -700,6 +713,10 @@
 "        byId('slug').value = '';\n" \
 "        if (byId('title')) byId('title').value = '';\n" \
 "        if (byId('tags')) byId('tags').value = '';\n" \
+"        if (byId('mobileUrl')) byId('mobileUrl').value = '';\n" \
+"        if (byId('utmSource')) byId('utmSource').value = '';\n" \
+"        if (byId('utmMedium')) byId('utmMedium').value = '';\n" \
+"        if (byId('utmCampaign')) byId('utmCampaign').value = '';\n" \
 "        byId('password').value = '';\n" \
 "        byId('ttl').value = '';\n" \
 "        if (byId('maxClicks')) byId('maxClicks').value = '';\n" \
@@ -709,6 +726,83 @@
 "      } finally {\n" \
 "        button.disabled = false;\n" \
 "        button.textContent = 'Shorten link';\n" \
+"      }\n" \
+"    });\n" \
+"  }\n" \
+"\n" \
+"  // Bulk Shorten form on homepage\n" \
+"  const bulkForm = byId('bulkForm');\n" \
+"  if (bulkForm) {\n" \
+"    bulkForm.addEventListener('submit', async (ev) => {\n" \
+"      ev.preventDefault();\n" \
+"      const key = byId('bulkApiKey').value.trim();\n" \
+"      const rawUrls = byId('bulkUrls').value.split(/\\r?\\n/).map((s) => s.trim()).filter(Boolean);\n" \
+"      const tag = byId('bulkTags') ? byId('bulkTags').value.trim() : '';\n" \
+"      const ttl = byId('bulkTtl') ? Number(byId('bulkTtl').value || 0) : 0;\n" \
+"      const box = byId('bulkResult');\n" \
+"      const btn = byId('bulkSubmitBtn');\n" \
+"      if (!key || !rawUrls.length || !box) return;\n" \
+"      const items = rawUrls.slice(0, 25).map((u) => {\n" \
+"        const item = { url: u };\n" \
+"        if (tag) item.tags = tag;\n" \
+"        if (ttl > 0) item.ttl_hours = ttl;\n" \
+"        return item;\n" \
+"      });\n" \
+"      btn.disabled = true;\n" \
+"      box.hidden = false;\n" \
+"      box.textContent = 'Shortening ' + items.length + ' URL(s)...';\n" \
+"      try {\n" \
+"        const res = await fetch('/api/bulk/shorten', {\n" \
+"          method: 'POST',\n" \
+"          headers: { 'Content-Type': 'application/json', 'X-API-Key': key },\n" \
+"          body: JSON.stringify({ links: items })\n" \
+"        });\n" \
+"        const data = await res.json();\n" \
+"        if (!res.ok || !data || !Array.isArray(data.results)) {\n" \
+"          box.textContent = (data && data.error) ? data.error : 'Bulk shorten failed.';\n" \
+"          return;\n" \
+"        }\n" \
+"        box.replaceChildren();\n" \
+"        const summary = document.createElement('p');\n" \
+"        summary.className = 'success';\n" \
+"        summary.textContent = 'Created ' + (data.created || 0) + ' link(s)' + (data.failed ? ' (' + data.failed + ' failed)' : '');\n" \
+"        box.append(summary);\n" \
+"        if (tag && /^[A-Za-z0-9_-]{1,32}$/.test(tag)) {\n" \
+"          const bioRow = document.createElement('div');\n" \
+"          bioRow.className = 'list-row';\n" \
+"          const bioLabel = document.createElement('span');\n" \
+"          bioLabel.textContent = 'Public Link-in-Bio Hub:';\n" \
+"          const bioLink = document.createElement('a');\n" \
+"          bioLink.href = '/bio/' + encodeURIComponent(tag);\n" \
+"          bioLink.target = '_blank';\n" \
+"          bioLink.textContent = '/bio/' + tag;\n" \
+"          bioRow.append(bioLabel, bioLink);\n" \
+"          box.append(bioRow);\n" \
+"        }\n" \
+"        for (const r of data.results) {\n" \
+"          const row = document.createElement('div');\n" \
+"          row.className = 'list-row';\n" \
+"          if (r.short_url) {\n" \
+"            const a = document.createElement('a');\n" \
+"            a.href = r.short_url;\n" \
+"            a.target = '_blank';\n" \
+"            a.textContent = r.short_url;\n" \
+"            const dest = document.createElement('span');\n" \
+"            dest.className = 'hint';\n" \
+"            dest.textContent = r.url || '';\n" \
+"            row.append(a, dest);\n" \
+"          } else {\n" \
+"            const errSpan = document.createElement('span');\n" \
+"            errSpan.className = 'error';\n" \
+"            errSpan.textContent = r.error || 'Error';\n" \
+"            row.append(errSpan);\n" \
+"          }\n" \
+"          box.append(row);\n" \
+"        }\n" \
+"      } catch (e) {\n" \
+"        box.textContent = 'Network error during bulk shorten.';\n" \
+"      } finally {\n" \
+"        btn.disabled = false;\n" \
 "      }\n" \
 "    });\n" \
 "  }\n" \
@@ -907,6 +1001,7 @@
 "      });\n" \
 "      if (target === 'tokens') loadTokens();\n" \
 "      if (target === 'audit') loadAudit();\n" \
+"      if (target === 'system') loadSystem();\n" \
 "    });\n" \
 "  });\n" \
 "\n" \
@@ -939,6 +1034,7 @@
 "    else if (link.is_expired) addBadge('Expired', 'exp');\n" \
 "    else addBadge('Active', 'ok');\n" \
 "    if (link.has_password) addBadge('Password', '');\n" \
+"    if (text(link.mobile_url)) addBadge('Mobile Route', 'tag');\n" \
 "    if (count(link.max_clicks) > 0) addBadge('Max ' + count(link.max_clicks), '');\n" \
 "    if (text(link.expires_at)) addBadge('Exp ' + text(link.expires_at).slice(0, 10), 'exp');\n" \
 "    if (text(link.tags)) {\n" \
@@ -984,6 +1080,7 @@
 "    byId('editSlug').value = text(link.slug);\n" \
 "    byId('editModalTitle').textContent = 'Edit /' + text(link.slug);\n" \
 "    byId('editUrl').value = text(link.url);\n" \
+"    if (byId('editMobileUrl')) byId('editMobileUrl').value = text(link.mobile_url);\n" \
 "    byId('editTitle').value = text(link.title);\n" \
 "    byId('editTags').value = text(link.tags);\n" \
 "    byId('editMaxClicks').value = String(count(link.max_clicks));\n" \
@@ -1144,6 +1241,42 @@
 "    }\n" \
 "  }\n" \
 "\n" \
+"  async function loadSystem() {\n" \
+"    if (!apiKey) return;\n" \
+"    const grid = byId('systemGrid'), prom = byId('prometheusBox');\n" \
+"    try {\n" \
+"      const [sysRes, promRes] = await Promise.all([\n" \
+"        fetch('/api/admin/system', { headers: headers(false), cache: 'no-store' }),\n" \
+"        fetch('/metrics', { headers: headers(false), cache: 'no-store' })\n" \
+"      ]);\n" \
+"      if (sysRes.ok && grid) {\n" \
+"        const sys = await sysRes.json();\n" \
+"        grid.replaceChildren();\n" \
+"        const addRow = (k, v) => {\n" \
+"          const r = document.createElement('div');\n" \
+"          r.className = 'list-row';\n" \
+"          const s1 = document.createElement('span'); s1.className = 'hint'; s1.textContent = k;\n" \
+"          const s2 = document.createElement('strong'); s2.textContent = String(v);\n" \
+"          r.append(s1, s2);\n" \
+"          grid.append(r);\n" \
+"        };\n" \
+"        addRow('C Standard', text(sys.c_standard));\n" \
+"        addRow('Hardening Profile', text(sys.hardening));\n" \
+"        addRow('SQLite Version', text(sys.sqlite_version));\n" \
+"        addRow('Uptime (seconds)', count(sys.uptime_seconds));\n" \
+"        addRow('Database Size (bytes)', count(sys.db_size_bytes));\n" \
+"        addRow('Total Links / Active / Expired', count(sys.total_links) + ' / ' + count(sys.active_links) + ' / ' + count(sys.expired_links));\n" \
+"        addRow('Total Visits / Unique Visitors', count(sys.total_visits) + ' / ' + count(sys.unique_visitors));\n" \
+"        addRow('Scoped Tokens / Audit Events', count(sys.active_tokens) + ' / ' + count(sys.audit_events));\n" \
+"      }\n" \
+"      if (promRes.ok && prom) {\n" \
+"        prom.textContent = await promRes.text();\n" \
+"      }\n" \
+"    } catch (e) {\n" \
+"      if (prom) prom.textContent = 'Could not load system metrics.';\n" \
+"    }\n" \
+"  }\n" \
+"\n" \
 "  byId('authForm').addEventListener('submit', (ev) => {\n" \
 "    ev.preventDefault();\n" \
 "    apiKey = byId('apiKey').value.trim();\n" \
@@ -1211,6 +1344,7 @@
 "      const slug = byId('editSlug').value;\n" \
 "      const payload = {\n" \
 "        url: byId('editUrl').value.trim(),\n" \
+"        mobile_url: byId('editMobileUrl') ? byId('editMobileUrl').value.trim() : '',\n" \
 "        title: byId('editTitle').value.trim(),\n" \
 "        tags: byId('editTags').value.trim(),\n" \
 "        max_clicks: Number(byId('editMaxClicks').value || 0),\n" \

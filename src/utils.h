@@ -13,6 +13,10 @@ int is_valid_http_url(const char *url, size_t max_len);
 int is_safe_redirect_url(const char *url, const char *base_url, size_t max_len);
 int is_valid_slug(const char *slug, size_t max_len);
 int is_valid_tag_list(const char *tags, size_t max_len);
+int is_valid_idempotency_key(const char *key, size_t max_len);
+int append_utm_params(const char *url, const char *utm_source,
+                      const char *utm_medium, const char *utm_campaign,
+                      char *url_out, size_t url_out_len);
 
 void classify_user_agent(const char *user_agent, char *device_out, size_t device_out_len);
 void classify_referrer(const char *referer, const char *base_url,

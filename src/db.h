@@ -13,6 +13,8 @@ struct link_options {
     const char *password;
     const char *title;
     const char *tags;
+    const char *mobile_url;
+    const char *idempotency_key;
 };
 
 int init_db(const char *db_path, const char *analytics_hmac_key);
@@ -21,8 +23,11 @@ int insert_link_ex(const char *slug, const char *url, const struct link_options 
 int update_link(const char *slug, const char *new_url, const char *title,
                 const char *tags, int ttl_hours, int max_clicks,
                 int is_active, const char *new_password);
+int find_slug_by_idempotency_key(const char *idempotency_key, char *slug_out, size_t slug_out_len);
 
 int get_link(const char *slug, char *url_out, size_t url_out_len, int *requires_pwd);
+int get_link_for_device(const char *slug, const char *device_type,
+                        char *url_out, size_t url_out_len, int *requires_pwd);
 int get_link_with_password(const char *slug, const char *password, char *url_out, size_t url_out_len);
 
 int record_visit(const char *slug, const char *ip);
@@ -32,6 +37,11 @@ int record_visit_ex(const char *slug, const char *ip,
 int get_stats(const char *slug, int *total_visits, int *unique_visits);
 char *get_detailed_stats_json(const char *slug);
 char *get_link_inspect_json(const char *slug);
+char *get_bio_collection_json(const char *profile);
+
+// Observability & Prometheus metrics
+char *get_prometheus_metrics(long uptime_seconds);
+char *get_system_diagnostics_json(long uptime_seconds);
 
 int check_rate_limit(const char *ip, int max_requests_per_min);
 int delete_link(const char *slug);

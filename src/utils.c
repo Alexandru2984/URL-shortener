@@ -74,6 +74,91 @@ int is_valid_tag_list(const char *tags, size_t max_len) {
     return token_len > 0 && token_len <= 24U;
 }
 
+int is_valid_idempotency_key(const char *key, size_t max_len) {
+    if (!key || max_len == 0) return 0;
+    size_t len = strnlen(key, max_len + 1U);
+    if (len < 4U || len > max_len) return 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)key[i];
+        if (!isalnum(c) && c != '-' && c != '_' && c != '.' && c != ':') return 0;
+    }
+    return 1;
+}
+
+static int append_urlencoded_param(char *buf, size_t buf_size, size_t *pos,
+                                   const char *sep, const char *key, const char *val) {
+    int n = snprintf(buf + *pos, buf_size - *pos, "%s%s=", sep, key);
+    if (n < 0 || *pos + (size_t)n >= buf_size) return -1;
+    *pos += (size_t)n;
+
+    static const char hex[] = "0123456789ABCDEF";
+    for (size_t i = 0; val[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)val[i];
+        if (c < 0x20U || c > 0x7eU) return -1;
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            if (*pos + 2U >= buf_size) return -1;
+            buf[(*pos)++] = (char)c;
+        } else if (c == ' ') {
+            if (*pos + 2U >= buf_size) return -1;
+            buf[(*pos)++] = '+';
+        } else {
+            if (*pos + 4U >= buf_size) return -1;
+            buf[(*pos)++] = '%';
+            buf[(*pos)++] = hex[c >> 4U];
+            buf[(*pos)++] = hex[c & 0x0fU];
+        }
+    }
+    buf[*pos] = '\0';
+    return 0;
+}
+
+int append_utm_params(const char *url, const char *utm_source,
+                      const char *utm_medium, const char *utm_campaign,
+                      char *url_out, size_t url_out_len) {
+    if (!url || !url_out || url_out_len == 0) return -1;
+
+    int has_src = utm_source && utm_source[0] != '\0';
+    int has_med = utm_medium && utm_medium[0] != '\0';
+    int has_cmp = utm_campaign && utm_campaign[0] != '\0';
+
+    if (!has_src && !has_med && !has_cmp) {
+        size_t len = strnlen(url, url_out_len);
+        if (len >= url_out_len) return -1;
+        memcpy(url_out, url, len + 1U);
+        return 0;
+    }
+
+    const char *fragment = strchr(url, '#');
+    size_t base_len = fragment ? (size_t)(fragment - url) : strlen(url);
+    if (base_len >= url_out_len) return -1;
+
+    memcpy(url_out, url, base_len);
+    url_out[base_len] = '\0';
+    size_t pos = base_len;
+
+    int has_query = memchr(url, '?', base_len) != NULL;
+    const char *sep = has_query ? "&" : "?";
+
+    if (has_src) {
+        if (append_urlencoded_param(url_out, url_out_len, &pos, sep, "utm_source", utm_source) != 0) return -1;
+        sep = "&";
+    }
+    if (has_med) {
+        if (append_urlencoded_param(url_out, url_out_len, &pos, sep, "utm_medium", utm_medium) != 0) return -1;
+        sep = "&";
+    }
+    if (has_cmp) {
+        if (append_urlencoded_param(url_out, url_out_len, &pos, sep, "utm_campaign", utm_campaign) != 0) return -1;
+    }
+
+    if (fragment) {
+        size_t frag_len = strlen(fragment);
+        if (pos + frag_len >= url_out_len) return -1;
+        memcpy(url_out + pos, fragment, frag_len + 1U);
+    }
+    return 0;
+}
+
 static int extract_url_host_and_port(const char *url, size_t max_len,
                                      char *host_out, size_t host_out_len,
                                      uint16_t *port_out, int *has_explicit_port) {

@@ -261,6 +261,8 @@ int init_db(const char *db_path, const char *analytics_key) {
         "is_active INTEGER DEFAULT 1,"
         "title TEXT,"
         "tags TEXT,"
+        "mobile_url TEXT,"
+        "idempotency_key TEXT,"
         "clicks_count INTEGER DEFAULT 0,"
         "created_at DATETIME DEFAULT CURRENT_TIMESTAMP);";
     static const char visits_sql[] =
@@ -306,6 +308,8 @@ int init_db(const char *db_path, const char *analytics_key) {
         ensure_table_column("links", "is_active", "INTEGER DEFAULT 1") != 0 ||
         ensure_table_column("links", "title", "TEXT") != 0 ||
         ensure_table_column("links", "tags", "TEXT") != 0 ||
+        ensure_table_column("links", "mobile_url", "TEXT") != 0 ||
+        ensure_table_column("links", "idempotency_key", "TEXT") != 0 ||
         ensure_table_column("links", "clicks_count", "INTEGER DEFAULT 0") != 0 ||
         exec_sql("create visits table", visits_sql) != 0 ||
         ensure_table_column("visits", "device_type", "TEXT DEFAULT 'unknown'") != 0 ||
@@ -317,6 +321,7 @@ int init_db(const char *db_path, const char *analytics_key) {
         exec_sql("create visits ts index", "CREATE INDEX IF NOT EXISTS idx_visits_slug_ts ON visits(slug, timestamp);") != 0 ||
         exec_sql("create rate limit index", "CREATE INDEX IF NOT EXISTS idx_rate_limit_ip_ts ON rate_limit(ip, timestamp);") != 0 ||
         exec_sql("create expiration index", "CREATE INDEX IF NOT EXISTS idx_links_expires_at ON links(expires_at);") != 0 ||
+        exec_sql("create idempotency index", "CREATE INDEX IF NOT EXISTS idx_links_idemp ON links(idempotency_key);") != 0 ||
         exec_sql("create audit ts index", "CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_logs(created_at DESC);") != 0 ||
         migrate_plaintext_passwords() != 0 ||
         anonymize_existing_visits() != 0) {
@@ -335,15 +340,17 @@ int insert_link_ex(const char *slug, const char *url, const struct link_options 
     const char *password = opts ? opts->password : NULL;
     const char *title = (opts && opts->title && opts->title[0]) ? opts->title : NULL;
     const char *tags = (opts && opts->tags && opts->tags[0]) ? opts->tags : NULL;
+    const char *mobile_url = (opts && opts->mobile_url && opts->mobile_url[0]) ? opts->mobile_url : NULL;
+    const char *idemp_key = (opts && opts->idempotency_key && opts->idempotency_key[0]) ? opts->idempotency_key : NULL;
 
     if (ttl_hours < 0 || max_clicks < 0 || activates_in_hours < 0) return -1;
 
     static const char sql[] =
-        "INSERT INTO links (slug, url, expires_at, activates_at, password, max_clicks, title, tags, is_active, clicks_count) "
+        "INSERT INTO links (slug, url, expires_at, activates_at, password, max_clicks, title, tags, mobile_url, idempotency_key, is_active, clicks_count) "
         "VALUES (?, ?, "
         "CASE WHEN ? > 0 THEN datetime('now', '+' || ? || ' hours') ELSE NULL END, "
         "CASE WHEN ? > 0 THEN datetime('now', '+' || ? || ' hours') ELSE NULL END, "
-        "?, ?, ?, ?, 1, 0);";
+        "?, ?, ?, ?, ?, ?, 1, 0);";
 
     sqlite3_stmt *statement = NULL;
     if (sqlite3_prepare_v2(db, sql, -1, &statement, NULL) != SQLITE_OK) return -1;
@@ -371,11 +378,37 @@ int insert_link_ex(const char *slug, const char *url, const struct link_options 
     else sqlite3_bind_null(statement, 9);
     if (tags) sqlite3_bind_text(statement, 10, tags, -1, SQLITE_TRANSIENT);
     else sqlite3_bind_null(statement, 10);
+    if (mobile_url) sqlite3_bind_text(statement, 11, mobile_url, -1, SQLITE_TRANSIENT);
+    else sqlite3_bind_null(statement, 11);
+    if (idemp_key) sqlite3_bind_text(statement, 12, idemp_key, -1, SQLITE_TRANSIENT);
+    else sqlite3_bind_null(statement, 12);
 
     int rc = sqlite3_step(statement);
     OPENSSL_cleanse(password_hash, sizeof(password_hash));
     sqlite3_finalize(statement);
     return rc == SQLITE_DONE ? 0 : -1;
+}
+
+int find_slug_by_idempotency_key(const char *idempotency_key, char *slug_out, size_t slug_out_len) {
+    if (!idempotency_key || !idempotency_key[0] || !slug_out || slug_out_len == 0) return -1;
+
+    static const char sql[] =
+        "SELECT slug FROM links WHERE idempotency_key = ? "
+        "AND created_at >= datetime('now', '-24 hours') LIMIT 1;";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_text(stmt, 1, idempotency_key, -1, SQLITE_TRANSIENT);
+
+    int found = -1;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const unsigned char *s = sqlite3_column_text(stmt, 0);
+        if (s && strlen((const char *)s) < slug_out_len) {
+            snprintf(slug_out, slug_out_len, "%s", (const char *)s);
+            found = 0;
+        }
+    }
+    sqlite3_finalize(stmt);
+    return found;
 }
 
 int insert_link(const char *slug, const char *url, int ttl_hours, const char *password) {
@@ -453,7 +486,8 @@ static int copy_column_text(sqlite3_stmt *statement, int column, char *output, s
     return 0;
 }
 
-int get_link(const char *slug, char *url_out, size_t url_out_len, int *requires_password) {
+int get_link_for_device(const char *slug, const char *device_type,
+                        char *url_out, size_t url_out_len, int *requires_password) {
     if (!slug || !url_out || url_out_len == 0 || !requires_password) return -1;
     *requires_password = 0;
 
@@ -463,7 +497,8 @@ int get_link(const char *slug, char *url_out, size_t url_out_len, int *requires_
         "activates_at IS NOT NULL AND datetime('now') < activates_at, "
         "COALESCE(is_active, 1), "
         "COALESCE(max_clicks, 0), "
-        "COALESCE(clicks_count, 0) "
+        "COALESCE(clicks_count, 0), "
+        "mobile_url "
         "FROM links WHERE slug = ?;";
     sqlite3_stmt *statement = NULL;
     if (sqlite3_prepare_v2(db, sql, -1, &statement, NULL) != SQLITE_OK) return -1;
@@ -491,12 +526,21 @@ int get_link(const char *slug, char *url_out, size_t url_out_len, int *requires_
                 *requires_password = 1;
                 result = 0;
             } else {
-                result = copy_column_text(statement, 0, url_out, url_out_len);
+                const unsigned char *mob = sqlite3_column_text(statement, 7);
+                if (device_type && strcmp(device_type, "mobile") == 0 && mob && mob[0] != '\0') {
+                    result = copy_column_text(statement, 7, url_out, url_out_len);
+                } else {
+                    result = copy_column_text(statement, 0, url_out, url_out_len);
+                }
             }
         }
     }
     sqlite3_finalize(statement);
     return result;
+}
+
+int get_link(const char *slug, char *url_out, size_t url_out_len, int *requires_password) {
+    return get_link_for_device(slug, "desktop", url_out, url_out_len, requires_password);
 }
 
 static void opportunistic_password_rehash(const char *slug, const char *previous_hash,
@@ -879,6 +923,184 @@ char *get_link_inspect_json(const char *slug) {
     return json;
 }
 
+char *get_bio_collection_json(const char *profile) {
+    if (!profile || !is_valid_slug(profile, 24U)) return NULL;
+
+    char tag_query[32];
+    int n = snprintf(tag_query, sizeof(tag_query), "bio-%s", profile);
+    if (n < 0 || (size_t)n >= sizeof(tag_query)) return NULL;
+
+    static const char sql[] =
+        "SELECT slug, url, COALESCE(title, slug), COALESCE(clicks_count, 0), created_at "
+        "FROM links "
+        "WHERE COALESCE(is_active, 1) = 1 "
+        "AND (password IS NULL OR password = '') "
+        "AND (expires_at IS NULL OR datetime('now') <= expires_at) "
+        "AND (activates_at IS NULL OR datetime('now') >= activates_at) "
+        "AND (COALESCE(max_clicks, 0) = 0 OR COALESCE(clicks_count, 0) < max_clicks) "
+        "AND (',' || COALESCE(tags, '') || ',' LIKE '%,' || ? || ',%' "
+        "     OR ',' || COALESCE(tags, '') || ',' LIKE '%,' || ? || ',%') "
+        "ORDER BY created_at DESC LIMIT 50;";
+
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return NULL;
+    sqlite3_bind_text(stmt, 1, tag_query, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, profile, -1, SQLITE_TRANSIENT);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *items = cJSON_CreateArray();
+    if (!root || !items) {
+        cJSON_Delete(root);
+        cJSON_Delete(items);
+        sqlite3_finalize(stmt);
+        return NULL;
+    }
+
+    cJSON_AddStringToObject(root, "profile", profile);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *slug = (const char *)sqlite3_column_text(stmt, 0);
+        const char *url = (const char *)sqlite3_column_text(stmt, 1);
+        const char *title = (const char *)sqlite3_column_text(stmt, 2);
+        int clicks = sqlite3_column_int(stmt, 3);
+        const char *created = (const char *)sqlite3_column_text(stmt, 4);
+
+        cJSON *obj = cJSON_CreateObject();
+        if (obj && slug && url) {
+            cJSON_AddStringToObject(obj, "slug", slug);
+            cJSON_AddStringToObject(obj, "url", url);
+            cJSON_AddStringToObject(obj, "title", title ? title : slug);
+            cJSON_AddNumberToObject(obj, "clicks", clicks);
+            cJSON_AddStringToObject(obj, "created_at", created ? created : "");
+            cJSON_AddItemToArray(items, obj);
+        } else {
+            cJSON_Delete(obj);
+        }
+    }
+    sqlite3_finalize(stmt);
+    cJSON_AddItemToObject(root, "links", items);
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    return json;
+}
+
+static void query_db_metrics(int *total_links, int *active_links, int *expired_links,
+                             int *disabled_links, int *total_visits, int *unique_visitors,
+                             int *active_tokens, int *audit_events, long *db_bytes) {
+    *total_links = *active_links = *expired_links = *disabled_links = 0;
+    *total_visits = *unique_visitors = *active_tokens = *audit_events = 0;
+    *db_bytes = 0;
+
+    static const char sql[] =
+        "SELECT "
+        "(SELECT COUNT(*) FROM links), "
+        "(SELECT COUNT(*) FROM links WHERE COALESCE(is_active, 1) = 1 AND (expires_at IS NULL OR datetime('now') <= expires_at)), "
+        "(SELECT COUNT(*) FROM links WHERE expires_at IS NOT NULL AND datetime('now') > expires_at), "
+        "(SELECT COUNT(*) FROM links WHERE COALESCE(is_active, 1) = 0), "
+        "(SELECT COUNT(*) FROM visits), "
+        "(SELECT COUNT(DISTINCT ip) FROM visits), "
+        "(SELECT COUNT(*) FROM api_tokens WHERE is_active = 1), "
+        "(SELECT COUNT(*) FROM audit_logs);";
+
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            *total_links = sqlite3_column_int(stmt, 0);
+            *active_links = sqlite3_column_int(stmt, 1);
+            *expired_links = sqlite3_column_int(stmt, 2);
+            *disabled_links = sqlite3_column_int(stmt, 3);
+            *total_visits = sqlite3_column_int(stmt, 4);
+            *unique_visitors = sqlite3_column_int(stmt, 5);
+            *active_tokens = sqlite3_column_int(stmt, 6);
+            *audit_events = sqlite3_column_int(stmt, 7);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    long page_count = 0, page_size = 4096;
+    if (sqlite3_prepare_v2(db, "PRAGMA page_count;", -1, &stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) page_count = (long)sqlite3_column_int64(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+    if (sqlite3_prepare_v2(db, "PRAGMA page_size;", -1, &stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) page_size = (long)sqlite3_column_int64(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+    *db_bytes = page_count * page_size;
+}
+
+char *get_prometheus_metrics(long uptime_seconds) {
+    int total_links, active_links, expired_links, disabled_links;
+    int total_visits, unique_visitors, active_tokens, audit_events;
+    long db_bytes;
+    query_db_metrics(&total_links, &active_links, &expired_links, &disabled_links,
+                     &total_visits, &unique_visitors, &active_tokens, &audit_events, &db_bytes);
+
+    char *buf = malloc(2048U);
+    if (!buf) return NULL;
+    snprintf(buf, 2048U,
+             "# HELP shortener_uptime_seconds Process uptime in seconds.\n"
+             "# TYPE shortener_uptime_seconds gauge\n"
+             "shortener_uptime_seconds %ld\n"
+             "# HELP shortener_links_total Total stored short links.\n"
+             "# TYPE shortener_links_total gauge\n"
+             "shortener_links_total %d\n"
+             "# HELP shortener_links_active Currently active short links.\n"
+             "# TYPE shortener_links_active gauge\n"
+             "shortener_links_active %d\n"
+             "# HELP shortener_links_expired Expired links awaiting cleanup.\n"
+             "# TYPE shortener_links_expired gauge\n"
+             "shortener_links_expired %d\n"
+             "# HELP shortener_links_disabled Administratively disabled links.\n"
+             "# TYPE shortener_links_disabled gauge\n"
+             "shortener_links_disabled %d\n"
+             "# HELP shortener_visits_total Total recorded link visits.\n"
+             "# TYPE shortener_visits_total counter\n"
+             "shortener_visits_total %d\n"
+             "# HELP shortener_unique_visitors_total Total unique HMAC visitor identifiers.\n"
+             "# TYPE shortener_unique_visitors_total gauge\n"
+             "shortener_unique_visitors_total %d\n"
+             "# HELP shortener_tokens_active Active scoped creator tokens.\n"
+             "# TYPE shortener_tokens_active gauge\n"
+             "shortener_tokens_active %d\n"
+             "# HELP shortener_audit_events_total Total security audit log entries.\n"
+             "# TYPE shortener_audit_events_total counter\n"
+             "shortener_audit_events_total %d\n"
+             "# HELP shortener_db_size_bytes SQLite database size in bytes.\n"
+             "# TYPE shortener_db_size_bytes gauge\n"
+             "shortener_db_size_bytes %ld\n",
+             uptime_seconds, total_links, active_links, expired_links, disabled_links,
+             total_visits, unique_visitors, active_tokens, audit_events, db_bytes);
+    return buf;
+}
+
+char *get_system_diagnostics_json(long uptime_seconds) {
+    int total_links, active_links, expired_links, disabled_links;
+    int total_visits, unique_visitors, active_tokens, audit_events;
+    long db_bytes;
+    query_db_metrics(&total_links, &active_links, &expired_links, &disabled_links,
+                     &total_visits, &unique_visitors, &active_tokens, &audit_events, &db_bytes);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return NULL;
+    cJSON_AddNumberToObject(root, "uptime_seconds", (double)uptime_seconds);
+    cJSON_AddNumberToObject(root, "total_links", total_links);
+    cJSON_AddNumberToObject(root, "active_links", active_links);
+    cJSON_AddNumberToObject(root, "expired_links", expired_links);
+    cJSON_AddNumberToObject(root, "disabled_links", disabled_links);
+    cJSON_AddNumberToObject(root, "total_visits", total_visits);
+    cJSON_AddNumberToObject(root, "unique_visitors", unique_visitors);
+    cJSON_AddNumberToObject(root, "active_tokens", active_tokens);
+    cJSON_AddNumberToObject(root, "audit_events", audit_events);
+    cJSON_AddNumberToObject(root, "db_size_bytes", (double)db_bytes);
+    cJSON_AddStringToObject(root, "sqlite_version", sqlite3_libversion());
+    cJSON_AddStringToObject(root, "c_standard", "C17 (ISO/IEC 9899:2018)");
+    cJSON_AddStringToObject(root, "hardening", "PIE, Full RELRO, Stack Protector Strong, FORTIFY_SOURCE=3, Strict CSP");
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    return json;
+}
+
 static void cleanup_stale_rate_limit_entries(void) {
     time_t now = time(NULL);
     if (now == (time_t)-1) return;
@@ -1175,7 +1397,8 @@ char *query_admin_links_json(const char *search, const char *tag,
         "COALESCE(l.clicks_count, 0) AS total_visits, "
         "(SELECT COUNT(DISTINCT v.ip) FROM visits v WHERE v.slug = l.slug) AS unique_visits, "
         "l.title, l.tags, "
-        "(l.expires_at IS NOT NULL AND datetime('now') > l.expires_at) AS is_expired "
+        "(l.expires_at IS NOT NULL AND datetime('now') > l.expires_at) AS is_expired, "
+        "l.mobile_url "
         "FROM links l "
         "WHERE (? IS NULL OR l.slug LIKE '%' || ? || '%' OR l.url LIKE '%' || ? || '%' OR COALESCE(l.title, '') LIKE '%' || ? || '%') "
         "AND (? IS NULL OR ',' || COALESCE(l.tags, '') || ',' LIKE '%,' || ? || ',%') "
@@ -1223,9 +1446,12 @@ char *query_admin_links_json(const char *search, const char *tag,
         const char *activates = (const char *)sqlite3_column_text(statement, 4);
         const char *title = (const char *)sqlite3_column_text(statement, 10);
         const char *tags = (const char *)sqlite3_column_text(statement, 11);
+        const char *mobile_url = (const char *)sqlite3_column_text(statement, 13);
 
         if (!item || !cJSON_AddStringToObject(item, "slug", slug ? slug : "") ||
             !cJSON_AddStringToObject(item, "url", url ? url : "") ||
+            !(mobile_url ? cJSON_AddStringToObject(item, "mobile_url", mobile_url)
+                         : cJSON_AddNullToObject(item, "mobile_url")) ||
             !cJSON_AddStringToObject(item, "created_at", created ? created : "") ||
             !(expires ? cJSON_AddStringToObject(item, "expires_at", expires)
                       : cJSON_AddNullToObject(item, "expires_at")) ||
