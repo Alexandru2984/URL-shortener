@@ -113,13 +113,13 @@ int main(void) {
     CHECK(total == 2 && unique == 1);
 
     // Test 1-click self-destruct link (max_clicks = 1) and scheduled link
-    struct link_options burn_opts = { 0, 1, 0, NULL, "One-time secret", "burn,security", NULL, NULL, NULL, 0, 302, NULL, NULL, 0 };
+    struct link_options burn_opts = { 0, 1, 0, NULL, "One-time secret", "burn,security", NULL, NULL, NULL, 0, 302, NULL, NULL, 0, 1 };
     CHECK(insert_link_ex("burn-once", "https://example.test/secret-doc", &burn_opts) == 0);
     CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == 0);
     CHECK(record_visit_geo("burn-once", "203.0.113.5", "desktop", "direct", "RO") == 0);
     CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == -3);
 
-    struct link_options sched_opts = { 0, 0, 24, NULL, "Future launch", "launch", NULL, NULL, NULL, 0, 302, NULL, NULL, 0 };
+    struct link_options sched_opts = { 0, 0, 24, NULL, "Future launch", "launch", NULL, NULL, NULL, 0, 302, NULL, NULL, 0, 1 };
     CHECK(insert_link_ex("future-link", "https://example.test/launch", &sched_opts) == 0);
     CHECK(get_link("future-link", target, sizeof(target), &requires_password) == -5);
 
@@ -128,7 +128,7 @@ int main(void) {
         0, 0, 0, NULL, "Smart App Link", "launch,mobile",
         "https://m.example.test/app", "idem-key-2026-001",
         "https://example.test/variant-b", 50, 308,
-        "RO", "https://ro.example.test/oferta", 1
+        "RO", "https://ro.example.test/oferta", 1, 1
     };
     CHECK(insert_link_ex("smart-app", "https://example.test/desktop", &smart_opts) == 0);
     char idem_slug[64];
@@ -270,6 +270,26 @@ int main(void) {
     CHECK(check_rate_limit("test-rate-key", 2) == 0);
     CHECK(check_rate_limit("test-rate-key", 2) == 0);
     CHECK(check_rate_limit("test-rate-key", 2) != 0);
+
+    // Test Domain Blacklist & Forward Query
+    CHECK(add_domain_blacklist("malicious.test", "Malware host") == 0);
+    CHECK(add_domain_blacklist("*.sketchy.xyz", "Phishing wildcard") == 0);
+    CHECK(is_domain_blacklisted("https://malicious.test/login") == 1);
+    CHECK(is_domain_blacklisted("https://sub.sketchy.xyz/promo") == 1);
+    CHECK(is_domain_blacklisted("https://safe.example.com") == 0);
+
+    char *blacklist_json = get_domain_blacklist_json();
+    CHECK(blacklist_json != NULL);
+    if (blacklist_json) {
+        CHECK(strstr(blacklist_json, "malicious.test") != NULL);
+        CHECK(strstr(blacklist_json, "*.sketchy.xyz") != NULL);
+        free(blacklist_json);
+    }
+    CHECK(remove_domain_blacklist("malicious.test") == 1);
+    CHECK(is_domain_blacklisted("https://malicious.test/login") == 0);
+
+    CHECK(is_forward_query_link("burn-once") == 1);
+
     CHECK(delete_link("new-link") == 0);
     CHECK(get_link("new-link", target, sizeof(target), &requires_password) == -1);
 

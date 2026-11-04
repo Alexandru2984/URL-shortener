@@ -22,6 +22,7 @@ struct link_options {
     const char *geo_country;
     const char *geo_url;
     int interstitial;
+    int forward_query;
 };
 
 int init_db(const char *db_path, const char *analytics_hmac_key);
@@ -52,6 +53,7 @@ int record_visit_geo(const char *slug, const char *ip,
 
 int get_stats(const char *slug, int *total_visits, int *unique_visits);
 int is_interstitial_link(const char *slug);
+int is_forward_query_link(const char *slug);
 char *get_detailed_stats_json(const char *slug);
 char *export_slug_analytics_csv(const char *slug);
 char *get_link_inspect_json(const char *slug);
@@ -88,6 +90,12 @@ char *export_links_csv(void);
 char *export_links_backup_json(void);
 int import_links_backup_json(const cJSON *root, const char *base_url,
                              int *restored_out, int *skipped_out);
+
+// Domain blacklist & phishing protection
+int add_domain_blacklist(const char *pattern, const char *reason);
+int remove_domain_blacklist(const char *pattern);
+int is_domain_blacklisted(const char *url_or_domain);
+char *get_domain_blacklist_json(void);
 
 void close_db(void);
 

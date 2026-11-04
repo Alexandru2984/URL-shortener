@@ -159,6 +159,52 @@ int append_utm_params(const char *url, const char *utm_source,
     return 0;
 }
 
+int merge_query_string_into_url(const char *base_url, const char *query_string,
+                                char *url_out, size_t url_out_len) {
+    if (!base_url || !url_out || url_out_len < 8U) return -1;
+    if (!query_string || !query_string[0]) {
+        if (strlen(base_url) >= url_out_len) return -1;
+        snprintf(url_out, url_out_len, "%s", base_url);
+        return 0;
+    }
+
+    while (*query_string == '?' || *query_string == '&') query_string++;
+    if (!query_string[0]) {
+        if (strlen(base_url) >= url_out_len) return -1;
+        snprintf(url_out, url_out_len, "%s", base_url);
+        return 0;
+    }
+
+    const char *frag = strchr(base_url, '#');
+    size_t base_part_len = frag ? (size_t)(frag - base_url) : strlen(base_url);
+    if (base_part_len >= url_out_len) return -1;
+
+    const char *q_mark = memchr(base_url, '?', base_part_len);
+    char sep = q_mark ? '&' : '?';
+    if (base_part_len > 0 && (base_url[base_part_len - 1U] == '?' || base_url[base_part_len - 1U] == '&')) {
+        sep = '\0';
+    }
+
+    size_t q_len = strlen(query_string);
+    size_t frag_len = frag ? strlen(frag) : 0U;
+    size_t needed = base_part_len + (sep ? 1U : 0U) + q_len + frag_len + 1U;
+    if (needed > url_out_len) return -1;
+
+    memcpy(url_out, base_url, base_part_len);
+    size_t p = base_part_len;
+    if (sep) {
+        url_out[p++] = sep;
+    }
+    memcpy(url_out + p, query_string, q_len);
+    p += q_len;
+    if (frag) {
+        memcpy(url_out + p, frag, frag_len);
+        p += frag_len;
+    }
+    url_out[p] = '\0';
+    return 0;
+}
+
 static int extract_url_host_and_port(const char *url, size_t max_len,
                                      char *host_out, size_t host_out_len,
                                      uint16_t *port_out, int *has_explicit_port) {
@@ -280,6 +326,63 @@ int is_valid_http_url(const char *url, size_t max_len) {
     char host[256];
     uint16_t port = 0;
     return extract_url_host_and_port(url, max_len, host, sizeof(host), &port, NULL);
+}
+
+int extract_url_hostname(const char *url, char *host_out, size_t host_out_len) {
+    if (!url || !host_out) return 0;
+    return extract_url_host_and_port(url, 2048U, host_out, host_out_len, NULL, NULL);
+}
+
+int match_domain_pattern(const char *domain, const char *pattern) {
+    if (!domain || !domain[0] || !pattern || !pattern[0]) return 0;
+
+    char d_lower[256], p_lower[256];
+    size_t d_len = strnlen(domain, sizeof(d_lower) - 1U);
+    size_t p_len = strnlen(pattern, sizeof(p_lower) - 1U);
+    for (size_t i = 0; i < d_len; i++) d_lower[i] = (char)tolower((unsigned char)domain[i]);
+    d_lower[d_len] = '\0';
+    for (size_t i = 0; i < p_len; i++) p_lower[i] = (char)tolower((unsigned char)pattern[i]);
+    p_lower[p_len] = '\0';
+
+    if (strcmp(d_lower, p_lower) == 0) return 1;
+
+    if (p_lower[0] == '*' && p_lower[1] == '.') {
+        const char *suffix = p_lower + 1;
+        size_t s_len = p_len - 1U;
+        if (strcmp(d_lower, p_lower + 2) == 0) return 1;
+        if (d_len > s_len && strcmp(d_lower + (d_len - s_len), suffix) == 0) return 1;
+        return 0;
+    }
+
+    if (d_len > p_len + 1U && d_lower[d_len - p_len - 1U] == '.' &&
+        strcmp(d_lower + (d_len - p_len), p_lower) == 0) {
+        return 1;
+    }
+
+    return 0;
+}
+
+int is_social_crawler(const char *user_agent) {
+    if (!user_agent || !user_agent[0]) return 0;
+    char lower[256];
+    size_t len = strnlen(user_agent, sizeof(lower) - 1U);
+    for (size_t i = 0; i < len; i++) {
+        lower[i] = (char)tolower((unsigned char)user_agent[i]);
+    }
+    lower[len] = '\0';
+
+    return (strstr(lower, "facebookexternalhit") ||
+            strstr(lower, "facebot") ||
+            strstr(lower, "twitterbot") ||
+            strstr(lower, "telegrambot") ||
+            strstr(lower, "discordbot") ||
+            strstr(lower, "slackbot") ||
+            strstr(lower, "whatsapp") ||
+            strstr(lower, "linkedinbot") ||
+            strstr(lower, "vkshare") ||
+            strstr(lower, "pinterest") ||
+            strstr(lower, "redditbot") ||
+            strstr(lower, "applebot")) ? 1 : 0;
 }
 
 static int is_private_or_reserved_ipv4(uint32_t ip_host_order) {

@@ -44,9 +44,9 @@ static void cleanup_test_files(const char *directory) {
     rmdir(directory);
 }
 
-static int send_http_request(uint16_t port, const char *method, const char *path,
-                             const char *api_key, const char *json_body,
-                             char *response_out, size_t response_out_len) {
+static int send_http_request_ex(uint16_t port, const char *method, const char *path,
+                                const char *api_key, const char *user_agent, const char *json_body,
+                                char *response_out, size_t response_out_len) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) return -1;
 
@@ -67,12 +67,13 @@ static int send_http_request(uint16_t port, const char *method, const char *path
         "%s %s HTTP/1.1\r\n"
         "Host: c.micutu.com\r\n"
         "Connection: close\r\n"
-        "User-Agent: curl/8.5.0\r\n"
+        "User-Agent: %s\r\n"
         "%s%s%s"
         "%s"
         "Content-Length: %zu\r\n\r\n"
         "%s",
         method, path,
+        user_agent ? user_agent : "curl/8.5.0",
         api_key ? "X-API-Key: " : "",
         api_key ? api_key : "",
         api_key ? "\r\n" : "",
@@ -103,6 +104,13 @@ static int send_http_request(uint16_t port, const char *method, const char *path
         return -1;
     }
     return status_code;
+}
+
+static int send_http_request(uint16_t port, const char *method, const char *path,
+                             const char *api_key, const char *json_body,
+                             char *response_out, size_t response_out_len) {
+    return send_http_request_ex(port, method, path, api_key, "curl/8.5.0",
+                                json_body, response_out, response_out_len);
 }
 
 static const char *find_http_body(const char *raw_response) {
@@ -290,6 +298,42 @@ int main(void) {
         CHECK(strstr(resp, "text/csv") != NULL);
         CHECK(strstr(resp, "category,dimension,visits,unique_visitors") != NULL);
         CHECK(send_http_request(port, "GET", "/api/stats/missing-xyz/export.csv", NULL, NULL, resp, sizeof(resp)) == 404);
+
+        // 10. Query parameter passthrough / forwarding
+        CHECK(send_http_request(port, "GET", "/restored-e2e?utm_source=twitter&promo=50", NULL, NULL, resp, sizeof(resp)) == 302);
+        CHECK(strstr(resp, "Location: https://example.test/restored?utm_source=twitter&promo=50") != NULL);
+
+        // 11. Domain Blacklist: Admin API, Rejection on Creation, and Live Redirect Blocking
+        CHECK(send_http_request(port, "POST", "/api/admin/blacklist", admin_key,
+                                "{\"pattern\":\"malware-e2e.test\",\"reason\":\"Malware site\"}",
+                                resp, sizeof(resp)) == 201);
+        CHECK(send_http_request(port, "GET", "/api/admin/blacklist", admin_key, NULL, resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "malware-e2e.test") != NULL);
+
+        // Shorten to blacklisted domain must fail
+        CHECK(send_http_request(port, "POST", "/shorten", admin_key,
+                                "{\"url\":\"https://malware-e2e.test/exploit\"}", resp, sizeof(resp)) == 400);
+
+        // Unblock domain
+        CHECK(send_http_request(port, "DELETE", "/api/admin/blacklist/malware-e2e.test", admin_key, NULL, resp, sizeof(resp)) == 200);
+
+        // Shorten now succeeds
+        CHECK(send_http_request(port, "POST", "/shorten", admin_key,
+                                "{\"url\":\"https://malware-e2e.test/exploit\",\"custom_slug\":\"unblocked-slug\"}",
+                                resp, sizeof(resp)) == 201);
+
+        // Re-block domain to verify redirect time blocking
+        CHECK(send_http_request(port, "POST", "/api/admin/blacklist", admin_key,
+                                "{\"pattern\":\"malware-e2e.test\",\"reason\":\"Flagged after link creation\"}",
+                                resp, sizeof(resp)) == 201);
+        CHECK(send_http_request(port, "GET", "/unblocked-slug", NULL, NULL, resp, sizeof(resp)) == 403);
+
+        // 12. Social crawler OpenGraph preview (e.g. Telegram / Twitter bot does not redirect, serves rich card)
+        CHECK(send_http_request_ex(port, "GET", "/preview-me", NULL,
+                                   "Mozilla/5.0 (compatible; TelegramBot; +https://telegram.org/bot)", NULL,
+                                   resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "property=\"og:title\"") != NULL);
+        CHECK(strstr(resp, "property=\"og:image\"") != NULL);
 
         CHECK(send_http_request(port, "DELETE", "/e2e-slug", admin_key, NULL, resp, sizeof(resp)) == 200);
         CHECK(send_http_request(port, "GET", "/e2e-slug", NULL, NULL, resp, sizeof(resp)) == 404);

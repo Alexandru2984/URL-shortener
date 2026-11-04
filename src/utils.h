@@ -17,6 +17,11 @@ int is_valid_idempotency_key(const char *key, size_t max_len);
 int append_utm_params(const char *url, const char *utm_source,
                       const char *utm_medium, const char *utm_campaign,
                       char *url_out, size_t url_out_len);
+int merge_query_string_into_url(const char *base_url, const char *query_string,
+                                char *url_out, size_t url_out_len);
+int extract_url_hostname(const char *url, char *host_out, size_t host_out_len);
+int match_domain_pattern(const char *domain, const char *pattern);
+int is_social_crawler(const char *user_agent);
 
 void classify_user_agent(const char *user_agent, char *device_out, size_t device_out_len);
 void classify_referrer(const char *referer, const char *base_url,

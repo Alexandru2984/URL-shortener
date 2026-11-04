@@ -40,6 +40,7 @@
 "      <div class=\"tabs\" role=\"tablist\">\n" \
 "        <button type=\"button\" class=\"tab-btn active\" data-admin-tab=\"links\">Links &amp; Controls</button>\n" \
 "        <button type=\"button\" class=\"tab-btn\" data-admin-tab=\"tokens\">Scoped Creator Tokens</button>\n" \
+"        <button type=\"button\" class=\"tab-btn\" data-admin-tab=\"blacklist\">Domain Blacklist</button>\n" \
 "        <button type=\"button\" class=\"tab-btn\" data-admin-tab=\"audit\">Security Audit Log</button>\n" \
 "        <button type=\"button\" class=\"tab-btn\" data-admin-tab=\"system\">System &amp; Metrics</button>\n" \
 "      </div>\n" \
@@ -88,6 +89,23 @@
 "          <table>\n" \
 "            <thead><tr><th>Name</th><th>Prefix</th><th>Created</th><th>Expires</th><th>Uses (Last Used)</th><th>Action</th></tr></thead>\n" \
 "            <tbody id=\"tokenRows\"></tbody>\n" \
+"          </table>\n" \
+"        </div>\n" \
+"      </div>\n" \
+"      <div data-admin-pane=\"blacklist\" hidden>\n" \
+"        <div class=\"panel\">\n" \
+"          <h2>Block Malicious or Phishing Domain</h2>\n" \
+"          <p class=\"hint\">Blocks link shortening to target host (supports wildcards like <code>*.evil.com</code> or exact <code>phish.site</code>). Existing links to this domain are immediately blocked on redirect.</p>\n" \
+"          <form id=\"blacklistForm\" class=\"grid-form\">\n" \
+"            <div class=\"field\"><label for=\"blacklistPattern\">Domain Pattern</label><input id=\"blacklistPattern\" required placeholder=\"*.phishing.com or spam.site\"></div>\n" \
+"            <div class=\"field\"><label for=\"blacklistReason\">Reason (optional)</label><input id=\"blacklistReason\" placeholder=\"Phishing / scam / malware\"></div>\n" \
+"            <div class=\"field\"><label>&nbsp;</label><button type=\"submit\" class=\"primary\">Block Domain</button></div>\n" \
+"          </form>\n" \
+"        </div>\n" \
+"        <div class=\"table-wrap\">\n" \
+"          <table>\n" \
+"            <thead><tr><th>Domain Pattern</th><th>Reason</th><th>Blocked At (UTC)</th><th>Action</th></tr></thead>\n" \
+"            <tbody id=\"blacklistRows\"></tbody>\n" \
 "          </table>\n" \
 "        </div>\n" \
 "      </div>\n" \

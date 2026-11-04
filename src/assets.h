@@ -1071,7 +1071,7 @@
 "  const byId = (id) => document.getElementById(id);\n" \
 "  const authPanel = byId('authPanel'), dashboard = byId('dashboard');\n" \
 "  const authStatus = byId('authStatus'), dashboardStatus = byId('dashboardStatus');\n" \
-"  const rows = byId('linkRows'), tokenRows = byId('tokenRows'), auditRows = byId('auditRows');\n" \
+"  const rows = byId('linkRows'), tokenRows = byId('tokenRows'), blacklistRows = byId('blacklistRows'), auditRows = byId('auditRows');\n" \
 "  const text = (v) => typeof v === 'string' ? v : '';\n" \
 "  const count = (v) => Number.isSafeInteger(v) && v >= 0 ? v : 0;\n" \
 "\n" \
@@ -1092,6 +1092,7 @@
 "        pane.hidden = pane.getAttribute('data-admin-pane') !== target;\n" \
 "      });\n" \
 "      if (target === 'tokens') loadTokens();\n" \
+"      if (target === 'blacklist') loadBlacklist();\n" \
 "      if (target === 'audit') loadAudit();\n" \
 "      if (target === 'system') loadSystem();\n" \
 "    });\n" \
@@ -1334,6 +1335,48 @@
 "    }\n" \
 "  }\n" \
 "\n" \
+"  async function loadBlacklist() {\n" \
+"    if (!apiKey || !blacklistRows) return;\n" \
+"    emptyRow(blacklistRows, 4, 'Loading domain blacklist...');\n" \
+"    try {\n" \
+"      const res = await fetch('/api/admin/blacklist', { headers: headers(false), cache: 'no-store' });\n" \
+"      if (!res.ok) throw new Error('Failed');\n" \
+"      const data = await res.json();\n" \
+"      const list = Array.isArray(data.blacklist) ? data.blacklist : [];\n" \
+"      const frag = document.createDocumentFragment();\n" \
+"      for (const item of list) {\n" \
+"        const tr = document.createElement('tr');\n" \
+"        tr.append(\n" \
+"          cell(text(item.pattern)),\n" \
+"          cell(text(item.reason) || '-'),\n" \
+"          cell(text(item.created_at))\n" \
+"        );\n" \
+"        const td = document.createElement('td');\n" \
+"        const btn = document.createElement('button');\n" \
+"        btn.type = 'button';\n" \
+"        btn.className = 'danger small';\n" \
+"        btn.textContent = 'Unblock';\n" \
+"        btn.addEventListener('click', async () => {\n" \
+"          if (!confirm('Unblock pattern ' + item.pattern + '?')) return;\n" \
+"          try {\n" \
+"            const delRes = await fetch('/api/admin/blacklist/' + encodeURIComponent(item.pattern), {\n" \
+"              method: 'DELETE',\n" \
+"              headers: headers(false)\n" \
+"            });\n" \
+"            if (delRes.ok) loadBlacklist();\n" \
+"          } catch (_) {}\n" \
+"        });\n" \
+"        td.append(btn);\n" \
+"        tr.append(td);\n" \
+"        frag.append(tr);\n" \
+"      }\n" \
+"      if (frag.childNodes.length) blacklistRows.replaceChildren(frag);\n" \
+"      else emptyRow(blacklistRows, 4, 'No domains currently blacklisted.');\n" \
+"    } catch (e) {\n" \
+"      emptyRow(blacklistRows, 4, 'Could not load domain blacklist.');\n" \
+"    }\n" \
+"  }\n" \
+"\n" \
 "  async function loadSystem() {\n" \
 "    if (!apiKey) return;\n" \
 "    const grid = byId('systemGrid'), prom = byId('prometheusBox');\n" \
@@ -1472,6 +1515,33 @@
 "        loadLinks();\n" \
 "      } catch (e) {\n" \
 "        setStatus(dashboardStatus, 'Cleanup request failed.');\n" \
+"      }\n" \
+"    });\n" \
+"  }\n" \
+"\n" \
+"  if (byId('blacklistForm')) {\n" \
+"    byId('blacklistForm').addEventListener('submit', async (e) => {\n" \
+"      e.preventDefault();\n" \
+"      const pEl = byId('blacklistPattern'), rEl = byId('blacklistReason');\n" \
+"      const pattern = (pEl ? pEl.value : '').trim();\n" \
+"      const reason = (rEl ? rEl.value : '').trim();\n" \
+"      if (!pattern || !apiKey) return;\n" \
+"      try {\n" \
+"        const res = await fetch('/api/admin/blacklist', {\n" \
+"          method: 'POST',\n" \
+"          headers: headers(true),\n" \
+"          body: JSON.stringify({ pattern: pattern, reason: reason })\n" \
+"        });\n" \
+"        if (res.ok) {\n" \
+"          if (pEl) pEl.value = '';\n" \
+"          if (rEl) rEl.value = '';\n" \
+"          setStatus(dashboardStatus, 'Domain pattern blocked: ' + pattern);\n" \
+"          loadBlacklist();\n" \
+"        } else {\n" \
+"          setStatus(dashboardStatus, 'Could not block pattern. Check syntax or duplicate.');\n" \
+"        }\n" \
+"      } catch (err) {\n" \
+"        setStatus(dashboardStatus, 'Network error blocking pattern.');\n" \
 "      }\n" \
 "    });\n" \
 "  }\n" \

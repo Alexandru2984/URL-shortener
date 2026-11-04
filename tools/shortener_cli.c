@@ -18,9 +18,13 @@ static void print_usage(const char *prog) {
             "                   [--interstitial] [--ttl <hours>] [--max-clicks <n>] [--key <token>]\n"
             "  %s inspect <slug>\n"
             "  %s stats <slug>\n"
+            "  %s export-csv <slug> [output.csv]\n"
             "  %s bio <tag>\n"
             "  %s qr <slug> [output.svg]\n"
             "  %s badge <slug> [output.svg]\n"
+            "  %s blacklist [--key <admin_key>]\n"
+            "  %s blacklist-add <pattern> [reason] [--key <admin_key>]\n"
+            "  %s blacklist-del <pattern> [--key <admin_key>]\n"
             "  %s backup [--key <admin_key>]\n"
             "  %s maintenance [--key <admin_key>]\n"
             "  %s health\n\n"
@@ -28,7 +32,7 @@ static void print_usage(const char *prog) {
             "  SHORTENER_HOST     Target host (default: 127.0.0.1)\n"
             "  SHORTENER_PORT     Target port (default: 8086)\n"
             "  SHORTENER_API_KEY  API Key or Scoped Creator Token (csh_...)\n",
-            prog, prog, prog, prog, prog, prog, prog, prog, prog);
+            prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog);
 }
 
 static int http_request(const char *host, const char *port, const char *method,
@@ -194,6 +198,117 @@ int main(int argc, char **argv) {
         const char *path = (strcmp(cmd, "backup") == 0) ? "/api/admin/backup.json" : "/api/admin/maintenance";
         const char *body = (strcmp(cmd, "backup") == 0) ? NULL : "{}";
         if (http_request(host, port, method, path, api_key, body, resp, sizeof(resp), &status) != 0) {
+            fprintf(stderr, "Error: could not connect to %s:%s\n", host, port);
+            return 1;
+        }
+        puts(extract_body(resp));
+        return status == 200 ? 0 : 1;
+    }
+
+    if (strcmp(cmd, "export-csv") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Error: missing <slug>\n");
+            return 1;
+        }
+        char path[256];
+        snprintf(path, sizeof(path), "/api/stats/%s/export.csv", argv[2]);
+        if (http_request(host, port, "GET", path, NULL, NULL, resp, sizeof(resp), &status) != 0 || status != 200) {
+            fprintf(stderr, "Error: failed to export analytics CSV (HTTP %d)\n", status);
+            return 1;
+        }
+        const char *csv = extract_body(resp);
+        if (argc >= 4) {
+            FILE *fp = fopen(argv[3], "wb");
+            if (!fp) {
+                perror("fopen");
+                return 1;
+            }
+            fputs(csv, fp);
+            fclose(fp);
+            printf("Saved CSV to %s\n", argv[3]);
+        } else {
+            puts(csv);
+        }
+        return 0;
+    }
+
+    if (strcmp(cmd, "blacklist") == 0 || strcmp(cmd, "blacklist-list") == 0) {
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--key") == 0 && i + 1 < argc) api_key = argv[++i];
+        }
+        if (!api_key || !api_key[0]) {
+            fprintf(stderr, "Error: provide --key <admin_key> or set SHORTENER_API_KEY\n");
+            return 1;
+        }
+        if (http_request(host, port, "GET", "/api/admin/blacklist", api_key, NULL, resp, sizeof(resp), &status) != 0) {
+            fprintf(stderr, "Error: could not connect to %s:%s\n", host, port);
+            return 1;
+        }
+        cJSON *out = cJSON_Parse(extract_body(resp));
+        if (out) {
+            char *pretty = cJSON_Print(out);
+            if (pretty) {
+                puts(pretty);
+                free(pretty);
+            }
+            cJSON_Delete(out);
+        } else {
+            puts(extract_body(resp));
+        }
+        return status == 200 ? 0 : 1;
+    }
+
+    if (strcmp(cmd, "blacklist-add") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Usage: %s blacklist-add <pattern> [reason] [--key <admin_key>]\n", argv[0]);
+            return 1;
+        }
+        const char *pattern = argv[2];
+        const char *reason = "";
+        for (int i = 3; i < argc; i++) {
+            if (strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
+                api_key = argv[++i];
+            } else if (!reason[0]) {
+                reason = argv[i];
+            }
+        }
+        if (!api_key || !api_key[0]) {
+            fprintf(stderr, "Error: provide --key <admin_key> or set SHORTENER_API_KEY\n");
+            return 1;
+        }
+        cJSON *payload = cJSON_CreateObject();
+        cJSON_AddStringToObject(payload, "pattern", pattern);
+        if (reason && reason[0]) cJSON_AddStringToObject(payload, "reason", reason);
+        char *json_str = cJSON_PrintUnformatted(payload);
+        cJSON_Delete(payload);
+        if (!json_str) return 1;
+
+        int rc = http_request(host, port, "POST", "/api/admin/blacklist", api_key, json_str, resp, sizeof(resp), &status);
+        free(json_str);
+        if (rc != 0) {
+            fprintf(stderr, "Error: could not connect to %s:%s\n", host, port);
+            return 1;
+        }
+        puts(extract_body(resp));
+        return (status == 200 || status == 201) ? 0 : 1;
+    }
+
+    if (strcmp(cmd, "blacklist-del") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Usage: %s blacklist-del <pattern> [--key <admin_key>]\n", argv[0]);
+            return 1;
+        }
+        const char *pattern = argv[2];
+        for (int i = 3; i < argc; i++) {
+            if (strcmp(argv[i], "--key") == 0 && i + 1 < argc) api_key = argv[++i];
+        }
+        if (!api_key || !api_key[0]) {
+            fprintf(stderr, "Error: provide --key <admin_key> or set SHORTENER_API_KEY\n");
+            return 1;
+        }
+        char path[256];
+        snprintf(path, sizeof(path), "/api/admin/blacklist/%s", pattern);
+        if (http_request(host, port, "DELETE", path, api_key, NULL, resp, sizeof(resp), &status) != 0) {
             fprintf(stderr, "Error: could not connect to %s:%s\n", host, port);
             return 1;
         }

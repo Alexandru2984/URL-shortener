@@ -408,6 +408,39 @@ static int send_short_link_created_json(struct MHD_Connection *connection,
     return ret;
 }
 
+struct query_builder {
+    char buf[1024];
+    size_t len;
+};
+
+static enum MHD_Result collect_incoming_query_cb(void *cls, enum MHD_ValueKind kind,
+                                                 const char *key, const char *value) {
+    (void)kind;
+    struct query_builder *qb = (struct query_builder *)cls;
+    if (!key || !key[0]) return MHD_YES;
+    if (strcmp(key, "direct") == 0) return MHD_YES;
+
+    if (qb->len > 0) {
+        if (qb->len + 1U >= sizeof(qb->buf)) return MHD_NO;
+        qb->buf[qb->len++] = '&';
+        qb->buf[qb->len] = '\0';
+    }
+
+    size_t klen = strlen(key);
+    size_t vlen = value ? strlen(value) : 0U;
+    if (qb->len + klen + (value ? 1U + vlen : 0U) >= sizeof(qb->buf)) return MHD_NO;
+
+    memcpy(qb->buf + qb->len, key, klen);
+    qb->len += klen;
+    if (value) {
+        qb->buf[qb->len++] = '=';
+        memcpy(qb->buf + qb->len, value, vlen);
+        qb->len += vlen;
+    }
+    qb->buf[qb->len] = '\0';
+    return MHD_YES;
+}
+
 static int handle_shorten(struct MHD_Connection *connection, const char *client_ip,
                           cJSON *json) {
     char actor[64];
@@ -437,6 +470,10 @@ static int handle_shorten(struct MHD_Connection *connection, const char *client_
         !is_safe_redirect_url(target_url->valuestring, g_base_url, MAX_URL_LEN)) {
         return send_error(connection, MHD_HTTP_BAD_REQUEST,
                           "A valid public HTTP or HTTPS URL is required");
+    }
+    if (is_domain_blacklisted(target_url->valuestring)) {
+        (void)record_audit_event("blacklist.rejected", actor, target_url->valuestring, client_ip, "Blocked short link for blacklisted domain");
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Destination domain is blocked by security blacklist");
     }
 
     const char *utm_source = NULL;
@@ -509,8 +546,19 @@ static int handle_shorten(struct MHD_Connection *connection, const char *client_
         (opts.geo_url && !is_safe_redirect_url(opts.geo_url, g_base_url, MAX_URL_LEN))) {
         return send_error(connection, MHD_HTTP_BAD_REQUEST, "geo_url must be a valid public HTTP or HTTPS URL");
     }
+    if (opts.mobile_url && is_domain_blacklisted(opts.mobile_url)) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Mobile destination domain is blocked by security blacklist");
+    }
+    if (opts.alt_url && is_domain_blacklisted(opts.alt_url)) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "A/B alternate domain is blocked by security blacklist");
+    }
+    if (opts.geo_url && is_domain_blacklisted(opts.geo_url)) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Geo-targeted domain is blocked by security blacklist");
+    }
     const cJSON *inter_item = cJSON_GetObjectItemCaseSensitive(json, "interstitial");
     opts.interstitial = (inter_item && (cJSON_IsTrue(inter_item) || (cJSON_IsNumber(inter_item) && inter_item->valueint != 0))) ? 1 : 0;
+    const cJSON *fwd_item = cJSON_GetObjectItemCaseSensitive(json, "forward_query");
+    opts.forward_query = (fwd_item && (cJSON_IsFalse(fwd_item) || (cJSON_IsNumber(fwd_item) && fwd_item->valueint == 0))) ? 0 : 1;
 
     char slug[MAX_SLUG_LEN];
     int custom_slug_requested = cJSON_IsString(custom_slug) && custom_slug->valuestring &&
@@ -575,7 +623,8 @@ static int handle_bulk_shorten(struct MHD_Connection *connection, const char *cl
         if (!cJSON_IsObject(entry)) continue;
         cJSON *u = cJSON_GetObjectItemCaseSensitive(entry, "url");
         if (!cJSON_IsString(u) || !u->valuestring ||
-            !is_safe_redirect_url(u->valuestring, g_base_url, MAX_URL_LEN)) {
+            !is_safe_redirect_url(u->valuestring, g_base_url, MAX_URL_LEN) ||
+            is_domain_blacklisted(u->valuestring)) {
             continue;
         }
         struct link_options opts;
@@ -884,6 +933,27 @@ static int handle_admin_maintenance(struct MHD_Connection *connection, const cha
     int ret = send_json_response(connection, MHD_HTTP_OK, report);
     free(report);
     return ret;
+}
+
+static int handle_admin_add_blacklist(struct MHD_Connection *connection,
+                                      const char *client_ip, const cJSON *json) {
+    if (!check_admin_api_key(connection)) {
+        return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
+    }
+    if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
+        return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+    }
+    const cJSON *pattern = cJSON_GetObjectItemCaseSensitive(json, "pattern");
+    const cJSON *reason = cJSON_GetObjectItemCaseSensitive(json, "reason");
+    if (!cJSON_IsString(pattern) || !pattern->valuestring || !pattern->valuestring[0]) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Missing or invalid domain pattern");
+    }
+    const char *r_str = (reason && cJSON_IsString(reason)) ? reason->valuestring : "";
+    if (add_domain_blacklist(pattern->valuestring, r_str) != 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Could not add domain pattern to blacklist");
+    }
+    (void)record_audit_event("blacklist.added", "admin", pattern->valuestring, client_ip, r_str);
+    return send_json_response(connection, MHD_HTTP_CREATED, "{\"status\":\"added\"}");
 }
 
 static int handle_inspect_page(struct MHD_Connection *connection, const char *slug,
@@ -1266,6 +1336,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
                  "    \"/api/stats/{slug}/export.csv\": { \"get\": { \"summary\": \"Export per-link analytics (daily, country, device) as CSV\" } },\n"
                  "    \"/api/bio/{tag}\": { \"get\": { \"summary\": \"Query Link-in-Bio public collection\" } },\n"
                  "    \"/api/admin/links\": { \"get\": { \"summary\": \"Query and filter links\" } },\n"
+                 "    \"/api/admin/blacklist\": { \"get\": { \"summary\": \"List blocked domain patterns\" }, \"post\": { \"summary\": \"Add domain pattern to blacklist\" } },\n"
                  "    \"/api/admin/bulk-action\": { \"post\": { \"summary\": \"Batch enable, disable, reset clicks, or delete links\" } },\n"
                  "    \"/api/admin/backup.json\": { \"get\": { \"summary\": \"Export JSON snapshot backup\" } },\n"
                  "    \"/api/admin/restore\": { \"post\": { \"summary\": \"Restore links from JSON snapshot\" } },\n"
@@ -1402,6 +1473,20 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         }
         char *json = get_system_diagnostics_json(get_uptime_seconds());
         if (!json) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Database error");
+        int ret = send_json_response(connection, MHD_HTTP_OK, json);
+        free(json);
+        return ret;
+    }
+
+    if (strcmp(url, "/api/admin/blacklist") == 0) {
+        if (!check_admin_api_key(connection)) {
+            return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
+        }
+        if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
+            return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+        }
+        char *json = get_domain_blacklist_json();
+        if (!json) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Memory error");
         int ret = send_json_response(connection, MHD_HTTP_OK, json);
         free(json);
         return ret;
@@ -1587,11 +1672,35 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         return send_error_page(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Unavailable", "This link cannot be redirected safely.");
     }
 
+    if (is_domain_blacklisted(target_url)) {
+        return send_error_page(connection, MHD_HTTP_FORBIDDEN, "Destination Blocked",
+                               "This link points to a destination domain that has been flagged as unsafe or blocked by security policy.");
+    }
+
+    if (is_social_crawler(ua_header)) {
+        return handle_social_preview_page(connection, slug, client_ip);
+    }
+
     // Interstitial safety preview: show destination first, count the visit only on confirmed continue
     const char *direct_param = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "direct");
     if ((!direct_param || strcmp(direct_param, "1") != 0) && is_interstitial_link(slug)) {
         return handle_inspect_page(connection, slug, client_ip);
     }
+
+    if (is_forward_query_link(slug)) {
+        struct query_builder qb;
+        qb.buf[0] = '\0';
+        qb.len = 0;
+        (void)MHD_get_connection_values(connection, MHD_GET_ARGUMENT_KIND, collect_incoming_query_cb, &qb);
+        if (qb.len > 0) {
+            char merged_url[MAX_URL_BUFFER];
+            if (merge_query_string_into_url(target_url, qb.buf, merged_url, sizeof(merged_url)) == 0 &&
+                is_safe_redirect_url(merged_url, g_base_url, MAX_URL_LEN)) {
+                snprintf(target_url, sizeof(target_url), "%s", merged_url);
+            }
+        }
+    }
+
     record_request_visit(connection, slug, client_ip);
     log_message("Redirected short link: %s", slug);
 
@@ -1629,6 +1738,15 @@ static int handle_delete(struct MHD_Connection *connection, const char *url,
         }
         (void)record_audit_event("token.revoke", "admin", id_str, client_ip, "Revoked scoped creator token");
         return send_json_response(connection, MHD_HTTP_OK, "{\"revoked\":true}");
+    }
+
+    if (strncmp(url, "/api/admin/blacklist/", 21) == 0) {
+        const char *pattern = url + 21;
+        if (!pattern[0]) return send_error(connection, MHD_HTTP_BAD_REQUEST, "Missing pattern");
+        int aff = remove_domain_blacklist(pattern);
+        if (aff < 0) return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid pattern");
+        (void)record_audit_event("blacklist.removed", "admin", pattern, client_ip, "Pattern unblocked");
+        return send_json_response(connection, MHD_HTTP_OK, "{\"status\":\"removed\"}");
     }
 
     const char *slug = url + 1;
@@ -1706,6 +1824,8 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
             ret = handle_admin_restore(connection, client_ip, json);
         } else if (strcasecmp(method, "POST") == 0 && strcmp(url, "/api/admin/maintenance") == 0) {
             ret = handle_admin_maintenance(connection, client_ip);
+        } else if (strcasecmp(method, "POST") == 0 && strcmp(url, "/api/admin/blacklist") == 0) {
+            ret = handle_admin_add_blacklist(connection, client_ip, json);
         } else if (strncmp(url, "/api/admin/links/", 17) == 0) {
             ret = handle_admin_update_link(connection, client_ip, url + 17, json);
         } else {

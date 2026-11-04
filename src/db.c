@@ -1,6 +1,7 @@
 #include "db.h"
 #include "utils.h"
 #include <cjson/cJSON.h>
+#include <ctype.h>
 #include <limits.h>
 #include <openssl/crypto.h>
 #include <openssl/hmac.h>
@@ -300,6 +301,12 @@ int init_db(const char *db_path, const char *analytics_key) {
         "ip_hash TEXT,"
         "details TEXT,"
         "created_at DATETIME DEFAULT CURRENT_TIMESTAMP);";
+    static const char blacklist_sql[] =
+        "CREATE TABLE IF NOT EXISTS domain_blacklist ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "pattern TEXT UNIQUE NOT NULL,"
+        "reason TEXT DEFAULT '',"
+        "created_at DATETIME DEFAULT CURRENT_TIMESTAMP);";
 
     if (exec_sql("create links table", links_sql) != 0 ||
         ensure_table_column("links", "expires_at", "DATETIME") != 0 ||
@@ -317,6 +324,7 @@ int init_db(const char *db_path, const char *analytics_key) {
         ensure_table_column("links", "geo_country", "TEXT") != 0 ||
         ensure_table_column("links", "geo_url", "TEXT") != 0 ||
         ensure_table_column("links", "interstitial", "INTEGER DEFAULT 0") != 0 ||
+        ensure_table_column("links", "forward_query", "INTEGER DEFAULT 1") != 0 ||
         ensure_table_column("links", "clicks_count", "INTEGER DEFAULT 0") != 0 ||
         exec_sql("create visits table", visits_sql) != 0 ||
         ensure_table_column("visits", "device_type", "TEXT DEFAULT 'unknown'") != 0 ||
@@ -325,12 +333,14 @@ int init_db(const char *db_path, const char *analytics_key) {
         exec_sql("create rate limit table", rate_limit_sql) != 0 ||
         exec_sql("create api tokens table", tokens_sql) != 0 ||
         exec_sql("create audit logs table", audit_sql) != 0 ||
+        exec_sql("create domain blacklist table", blacklist_sql) != 0 ||
         exec_sql("create visits index", "CREATE INDEX IF NOT EXISTS idx_visits_slug ON visits(slug);") != 0 ||
         exec_sql("create visits ts index", "CREATE INDEX IF NOT EXISTS idx_visits_slug_ts ON visits(slug, timestamp);") != 0 ||
         exec_sql("create rate limit index", "CREATE INDEX IF NOT EXISTS idx_rate_limit_ip_ts ON rate_limit(ip, timestamp);") != 0 ||
         exec_sql("create expiration index", "CREATE INDEX IF NOT EXISTS idx_links_expires_at ON links(expires_at);") != 0 ||
         exec_sql("create idempotency index", "CREATE INDEX IF NOT EXISTS idx_links_idemp ON links(idempotency_key);") != 0 ||
         exec_sql("create audit ts index", "CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_logs(created_at DESC);") != 0 ||
+        exec_sql("create blacklist pattern index", "CREATE INDEX IF NOT EXISTS idx_domain_blacklist_pattern ON domain_blacklist(pattern);") != 0 ||
         migrate_plaintext_passwords() != 0 ||
         anonymize_existing_visits() != 0) {
         close_db();
@@ -362,15 +372,16 @@ int insert_link_ex(const char *slug, const char *url, const struct link_options 
         if (strcmp(clean_geo, "XX") == 0) clean_geo[0] = '\0';
     }
     int interstitial = (opts && opts->interstitial) ? 1 : 0;
+    int forward_query = (opts && opts->forward_query == 0) ? 0 : 1;
 
     if (ttl_hours < 0 || max_clicks < 0 || activates_in_hours < 0) return -1;
 
     static const char sql[] =
-        "INSERT INTO links (slug, url, expires_at, activates_at, password, max_clicks, title, tags, mobile_url, idempotency_key, alt_url, alt_weight, redirect_code, geo_country, geo_url, interstitial, is_active, clicks_count) "
+        "INSERT INTO links (slug, url, expires_at, activates_at, password, max_clicks, title, tags, mobile_url, idempotency_key, alt_url, alt_weight, redirect_code, geo_country, geo_url, interstitial, forward_query, is_active, clicks_count) "
         "VALUES (?, ?, "
         "CASE WHEN ? > 0 THEN datetime('now', '+' || ? || ' hours') ELSE NULL END, "
         "CASE WHEN ? > 0 THEN datetime('now', '+' || ? || ' hours') ELSE NULL END, "
-        "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0);";
+        "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0);";
 
     sqlite3_stmt *statement = NULL;
     if (sqlite3_prepare_v2(db, sql, -1, &statement, NULL) != SQLITE_OK) return -1;
@@ -414,6 +425,7 @@ int insert_link_ex(const char *slug, const char *url, const struct link_options 
         sqlite3_bind_null(statement, 17);
     }
     sqlite3_bind_int(statement, 18, interstitial);
+    sqlite3_bind_int(statement, 19, forward_query);
 
     int rc = sqlite3_step(statement);
     OPENSSL_cleanse(password_hash, sizeof(password_hash));
@@ -988,6 +1000,20 @@ int is_interstitial_link(const char *slug) {
     return flag ? 1 : 0;
 }
 
+int is_forward_query_link(const char *slug) {
+    if (!slug || !slug[0]) return 1;
+    static const char sql[] = "SELECT COALESCE(forward_query, 1) FROM links WHERE slug = ?;";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return 1;
+    sqlite3_bind_text(stmt, 1, slug, -1, SQLITE_TRANSIENT);
+    int flag = 1;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        flag = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return flag ? 1 : 0;
+}
+
 char *export_slug_analytics_csv(const char *slug) {
     if (!slug || !slug[0]) return NULL;
 
@@ -1066,7 +1092,8 @@ char *get_link_inspect_json(const char *slug) {
         "expires_at IS NOT NULL AND datetime('now') > expires_at, "
         "activates_at IS NOT NULL AND datetime('now') < activates_at, "
         "mobile_url, alt_url, COALESCE(alt_weight, 0), "
-        "geo_country, geo_url, COALESCE(redirect_code, 302), COALESCE(interstitial, 0) "
+        "geo_country, geo_url, COALESCE(redirect_code, 302), COALESCE(interstitial, 0), "
+        "COALESCE(forward_query, 1) "
         "FROM links WHERE slug = ?;";
 
     sqlite3_stmt *stmt = NULL;
@@ -1097,6 +1124,7 @@ char *get_link_inspect_json(const char *slug) {
     const char *geo_url = (const char *)sqlite3_column_text(stmt, 17);
     int redirect_code = sqlite3_column_int(stmt, 18);
     int interstitial = sqlite3_column_int(stmt, 19);
+    int forward_query = sqlite3_column_int(stmt, 20);
 
     const char *status = "active";
     if (!is_active) status = "disabled";
@@ -1128,6 +1156,7 @@ char *get_link_inspect_json(const char *slug) {
     if (geo_country && geo_country[0]) cJSON_AddStringToObject(root, "geo_country", geo_country);
     else cJSON_AddNullToObject(root, "geo_country");
     cJSON_AddBoolToObject(root, "interstitial", interstitial != 0);
+    cJSON_AddBoolToObject(root, "forward_query", forward_query != 0);
     cJSON_AddNumberToObject(root, "alt_weight", alt_weight);
     cJSON_AddNumberToObject(root, "redirect_code", redirect_code);
     cJSON_AddNumberToObject(root, "max_clicks", max_clicks);
@@ -2032,6 +2061,120 @@ int import_links_backup_json(const cJSON *root, const char *base_url,
     if (restored_out) *restored_out = restored;
     if (skipped_out) *skipped_out = skipped;
     return 0;
+}
+
+int add_domain_blacklist(const char *pattern, const char *reason) {
+    if (!pattern || !pattern[0]) return -1;
+
+    size_t len = strlen(pattern);
+    if (len > 128U) return -1;
+
+    char p_clean[132];
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)pattern[i];
+        if (c <= 0x20 || c > 0x7e || c == '/' || c == ':' || c == '?' || c == '#') return -1;
+        p_clean[i] = (char)tolower(c);
+    }
+    p_clean[len] = '\0';
+
+    static const char sql[] =
+        "INSERT OR REPLACE INTO domain_blacklist (pattern, reason) VALUES (?, ?);";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+
+    sqlite3_bind_text(stmt, 1, p_clean, -1, SQLITE_TRANSIENT);
+    if (reason && reason[0]) sqlite3_bind_text(stmt, 2, reason, -1, SQLITE_TRANSIENT);
+    else sqlite3_bind_text(stmt, 2, "", -1, SQLITE_STATIC);
+
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE ? 0 : -1;
+}
+
+int remove_domain_blacklist(const char *pattern) {
+    if (!pattern || !pattern[0]) return -1;
+
+    char p_clean[132];
+    size_t len = strlen(pattern);
+    if (len > 128U) return -1;
+    for (size_t i = 0; i < len; i++) {
+        p_clean[i] = (char)tolower((unsigned char)pattern[i]);
+    }
+    p_clean[len] = '\0';
+
+    static const char sql[] = "DELETE FROM domain_blacklist WHERE pattern = ?;";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+
+    sqlite3_bind_text(stmt, 1, p_clean, -1, SQLITE_TRANSIENT);
+    int rc = sqlite3_step(stmt);
+    int affected = sqlite3_changes(db);
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE ? affected : -1;
+}
+
+int is_domain_blacklisted(const char *url_or_domain) {
+    if (!url_or_domain || !url_or_domain[0]) return 0;
+
+    char host[256];
+    if (strncmp(url_or_domain, "http://", 7) == 0 || strncmp(url_or_domain, "https://", 8) == 0) {
+        if (!extract_url_hostname(url_or_domain, host, sizeof(host))) {
+            return 0;
+        }
+    } else {
+        size_t len = strlen(url_or_domain);
+        if (len >= sizeof(host)) return 0;
+        for (size_t i = 0; i < len; i++) {
+            host[i] = (char)tolower((unsigned char)url_or_domain[i]);
+        }
+        host[len] = '\0';
+    }
+
+    static const char sql[] = "SELECT pattern FROM domain_blacklist;";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return 0;
+
+    int matched = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *pattern = (const char *)sqlite3_column_text(stmt, 0);
+        if (pattern && match_domain_pattern(host, pattern)) {
+            matched = 1;
+            break;
+        }
+    }
+    sqlite3_finalize(stmt);
+    return matched;
+}
+
+char *get_domain_blacklist_json(void) {
+    static const char sql[] =
+        "SELECT id, pattern, COALESCE(reason, ''), created_at FROM domain_blacklist "
+        "ORDER BY created_at DESC LIMIT 500;";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return NULL;
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(root, "blacklist");
+    if (!root || !arr) {
+        cJSON_Delete(root);
+        sqlite3_finalize(stmt);
+        return NULL;
+    }
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        cJSON *item = cJSON_CreateObject();
+        if (!item) continue;
+        cJSON_AddNumberToObject(item, "id", sqlite3_column_int(stmt, 0));
+        cJSON_AddStringToObject(item, "pattern", (const char *)sqlite3_column_text(stmt, 1));
+        cJSON_AddStringToObject(item, "reason", (const char *)sqlite3_column_text(stmt, 2));
+        cJSON_AddStringToObject(item, "created_at", (const char *)sqlite3_column_text(stmt, 3));
+        cJSON_AddItemToArray(arr, item);
+    }
+    sqlite3_finalize(stmt);
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    return json;
 }
 
 void close_db(void) {

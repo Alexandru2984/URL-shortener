@@ -159,6 +159,44 @@ int main(void) {
     CHECK(password_needs_rehash("legacy-password"));
     CHECK(!verify_password("legacy-password", "pbkdf2-sha256$not-valid"));
 
+    // Domain pattern matcher & Blacklist checks
+    CHECK(match_domain_pattern("malware.test", "malware.test"));
+    CHECK(match_domain_pattern("sub.malware.test", "malware.test"));
+    CHECK(match_domain_pattern("a.b.malware.test", "malware.test"));
+    CHECK(!match_domain_pattern("notmalware.test", "malware.test"));
+    CHECK(match_domain_pattern("phish.net", "*.phish.net"));
+    CHECK(match_domain_pattern("login.phish.net", "*.phish.net"));
+    CHECK(!match_domain_pattern("phish.com", "*.phish.net"));
+    CHECK(match_domain_pattern("sketchy.xyz", "*.xyz"));
+    CHECK(!match_domain_pattern("xyz.com", "*.xyz"));
+
+    // Hostname extraction
+    char extracted_host[128];
+    CHECK(extract_url_hostname("https://sub.domain.test:8080/path?q=1", extracted_host, sizeof(extracted_host)));
+    CHECK(strcmp(extracted_host, "sub.domain.test") == 0);
+    CHECK(extract_url_hostname("http://example.org/", extracted_host, sizeof(extracted_host)));
+    CHECK(strcmp(extracted_host, "example.org") == 0);
+
+    // Social Crawler detection
+    CHECK(is_social_crawler("Mozilla/5.0 (compatible; TelegramBot; +https://telegram.org/bot)"));
+    CHECK(is_social_crawler("Twitterbot/1.0"));
+    CHECK(is_social_crawler("facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)"));
+    CHECK(is_social_crawler("Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)"));
+    CHECK(is_social_crawler("WhatsApp/2.21.12.21 i"));
+    CHECK(!is_social_crawler("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"));
+    CHECK(!is_social_crawler("curl/8.5.0"));
+
+    // Query parameter passthrough & merging
+    char merged[512];
+    CHECK(merge_query_string_into_url("https://example.test/item", "ref=123", merged, sizeof(merged)) == 0);
+    CHECK(strcmp(merged, "https://example.test/item?ref=123") == 0);
+    CHECK(merge_query_string_into_url("https://example.test/item?color=red", "size=L&ref=123", merged, sizeof(merged)) == 0);
+    CHECK(strcmp(merged, "https://example.test/item?color=red&size=L&ref=123") == 0);
+    CHECK(merge_query_string_into_url("https://example.test/page#reviews", "utm_source=tw", merged, sizeof(merged)) == 0);
+    CHECK(strcmp(merged, "https://example.test/page?utm_source=tw#reviews") == 0);
+    CHECK(merge_query_string_into_url("https://example.test/page?v=1#reviews", "utm_source=tw", merged, sizeof(merged)) == 0);
+    CHECK(strcmp(merged, "https://example.test/page?v=1&utm_source=tw#reviews") == 0);
+
     if (failures != 0) return 1;
     puts("test_utils: ok");
     return 0;
