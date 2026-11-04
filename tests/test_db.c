@@ -96,12 +96,89 @@ int main(void) {
     CHECK(get_link_with_password("new-link", "new-password", target, sizeof(target)) == 0);
     CHECK(get_link_with_password("new-link", "wrong-password", target, sizeof(target)) == -4);
 
-    CHECK(record_visit("new-link", "127.0.0.1") == 0);
-    CHECK(record_visit("new-link", "127.0.0.1") == 0);
+    // Ensure inspect JSON redacts target_url when link is password-protected
+    char *inspect_pwd = get_link_inspect_json("new-link");
+    CHECK(inspect_pwd != NULL);
+    if (inspect_pwd) {
+        CHECK(strstr(inspect_pwd, "\"has_password\":true") != NULL);
+        CHECK(strstr(inspect_pwd, "https://example.test/new") == NULL);
+        free(inspect_pwd);
+    }
+
+    CHECK(record_visit_ex("new-link", "127.0.0.1", "desktop", "github.com") == 0);
+    CHECK(record_visit_ex("new-link", "127.0.0.1", "mobile", "direct") == 0);
     int total = 0;
     int unique = 0;
     CHECK(get_stats("new-link", &total, &unique) == 0);
     CHECK(total == 2 && unique == 1);
+
+    // Test 1-click self-destruct link (max_clicks = 1) and scheduled link
+    struct link_options burn_opts = { 0, 1, 0, NULL, "One-time secret", "burn,security" };
+    CHECK(insert_link_ex("burn-once", "https://example.test/secret-doc", &burn_opts) == 0);
+    CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == 0);
+    CHECK(record_visit_ex("burn-once", "203.0.113.5", "desktop", "direct") == 0);
+    CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == -3);
+
+    struct link_options sched_opts = { 0, 0, 24, NULL, "Future launch", "launch" };
+    CHECK(insert_link_ex("future-link", "https://example.test/launch", &sched_opts) == 0);
+    CHECK(get_link("future-link", target, sizeof(target), &requires_password) == -5);
+
+    // Test link editing & disable/enable toggle
+    CHECK(update_link("burn-once", "https://example.test/updated-doc", "Updated title",
+                      "work,updated", 48, 5, 0, NULL) == 0);
+    CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == -6);
+    CHECK(update_link("burn-once", "https://example.test/updated-doc", "Updated title",
+                      "work,updated", 48, 5, 1, NULL) == 0);
+    CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == 0);
+    CHECK(strcmp(target, "https://example.test/updated-doc") == 0);
+
+    // Test detailed stats, admin query filtering, and CSV export
+    char *detailed = get_detailed_stats_json("burn-once");
+    CHECK(detailed != NULL);
+    if (detailed) {
+        CHECK(strstr(detailed, "\"remaining_clicks\":4") != NULL);
+        free(detailed);
+    }
+
+    char *filtered = query_admin_links_json("Updated", "work", "active", 50, 0);
+    CHECK(filtered != NULL);
+    if (filtered) {
+        CHECK(strstr(filtered, "burn-once") != NULL);
+        free(filtered);
+    }
+
+    char *csv = export_links_csv();
+    CHECK(csv != NULL);
+    if (csv) {
+        CHECK(strstr(csv, "\"burn-once\"") != NULL);
+        free(csv);
+    }
+
+    // Test scoped creator tokens & security audit logs
+    char raw_token[64];
+    char token_actor[64];
+    CHECK(create_api_token("CI Pipeline", 30, raw_token, sizeof(raw_token)) == 0);
+    CHECK(verify_creator_token(raw_token, token_actor, sizeof(token_actor)) == 1);
+    CHECK(strcmp(token_actor, "token:CI Pipeline") == 0);
+    CHECK(verify_creator_token("csh_invalidtoken000000000000000000000000", NULL, 0) == 0);
+
+    char *tokens_json = list_api_tokens_json();
+    CHECK(tokens_json != NULL);
+    if (tokens_json) {
+        CHECK(strstr(tokens_json, "CI Pipeline") != NULL);
+        free(tokens_json);
+    }
+    CHECK(revoke_api_token(1) == 0);
+    CHECK(verify_creator_token(raw_token, NULL, 0) == 0);
+
+    CHECK(record_audit_event("link.create", "admin", "burn-once", "127.0.0.1", "Created test link") == 0);
+    char *audit_json = get_audit_logs_json(20);
+    CHECK(audit_json != NULL);
+    if (audit_json) {
+        CHECK(strstr(audit_json, "link.create") != NULL);
+        free(audit_json);
+    }
+
     CHECK(check_rate_limit("test-rate-key", 2) == 0);
     CHECK(check_rate_limit("test-rate-key", 2) == 0);
     CHECK(check_rate_limit("test-rate-key", 2) != 0);

@@ -31,6 +31,7 @@ extern const char *g_api_key;
 extern const char *g_base_url;
 
 static volatile sig_atomic_t running = 1;
+static int g_analytics_retention_days = 90;
 static char api_key_from_file[MAX_API_KEY_LEN + 1U];
 static char analytics_key_from_file[MAX_API_KEY_LEN + 1U];
 
@@ -143,7 +144,7 @@ static void signal_handler(int signum) {
     running = 0;
 }
 
-// Background thread: cleanup expired links every hour
+// Background thread: cleanup expired links and old analytics every hour
 static void *cleanup_thread_func(void *arg) {
     (void)arg;
     while (running) {
@@ -154,6 +155,11 @@ static void *cleanup_thread_func(void *arg) {
         int cleaned = cleanup_expired_links();
         if (cleaned > 0) {
             log_message("Cleanup: removed %d expired link(s)", cleaned);
+        }
+        int purged = cleanup_old_analytics(g_analytics_retention_days);
+        if (purged > 0) {
+            log_message("Cleanup: purged %d analytics row(s) older than %d days",
+                        purged, g_analytics_retention_days);
         }
     }
     return NULL;
@@ -211,16 +217,33 @@ int main(void) {
         g_base_url = base_url_env;
     }
 
+    const char *retention_env = getenv("ANALYTICS_RETENTION_DAYS");
+    if (retention_env && retention_env[0]) {
+        char *end = NULL;
+        errno = 0;
+        long days = strtol(retention_env, &end, 10);
+        if (errno != 0 || end == retention_env || *end != '\0' || days < 1 || days > 3650) {
+            fprintf(stderr, "Invalid ANALYTICS_RETENTION_DAYS value\n");
+            scrub_secrets();
+            return 1;
+        }
+        g_analytics_retention_days = (int)days;
+    }
+
     if (init_db("data/shortener.db", analytics_key) != 0) {
         fprintf(stderr, "Failed to initialize database.\n");
         scrub_secrets();
         return 1;
     }
 
-    // Startup cleanup of expired links
+    // Startup cleanup of expired links and old analytics
     int cleaned = cleanup_expired_links();
     if (cleaned > 0) {
         log_message("Startup cleanup: removed %d expired link(s)", cleaned);
+    }
+    int purged = cleanup_old_analytics(g_analytics_retention_days);
+    if (purged > 0) {
+        log_message("Startup cleanup: purged %d old analytics row(s)", purged);
     }
 
     log_message("Starting server...");

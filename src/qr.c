@@ -9,7 +9,6 @@
 #define QR_MAX_CODEWORDS 172
 
 struct qr_version_spec {
-    int version;
     int size;
     int total_codewords;
     int data_codewords;
@@ -19,12 +18,12 @@ struct qr_version_spec {
 };
 
 static const struct qr_version_spec k_qr_specs[QR_MAX_VERSION] = {
-    { 1, 21,  26,  19,  7, 1,  0 },
-    { 2, 25,  44,  34, 10, 1, 18 },
-    { 3, 29,  70,  55, 15, 1, 22 },
-    { 4, 33, 100,  80, 20, 1, 26 },
-    { 5, 37, 134, 108, 26, 1, 30 },
-    { 6, 41, 172, 136, 18, 2, 34 }
+    { 21,  26,  19,  7, 1,  0 },
+    { 25,  44,  34, 10, 1, 18 },
+    { 29,  70,  55, 15, 1, 22 },
+    { 33, 100,  80, 20, 1, 26 },
+    { 37, 134, 108, 26, 1, 30 },
+    { 41, 172, 136, 18, 2, 34 }
 };
 
 static uint8_t gf256_mul(uint8_t x, uint8_t y) {
@@ -299,7 +298,6 @@ char *qr_generate_svg(const char *text, int border_modules) {
     }
 
     // Choose best mask out of 0..7
-    int best_mask = 0;
     int best_penalty = 0x7fffffff;
     uint8_t best_modules[QR_MAX_SIZE][QR_MAX_SIZE];
     memset(best_modules, 0, sizeof(best_modules));
@@ -318,11 +316,9 @@ char *qr_generate_svg(const char *text, int border_modules) {
         int penalty = compute_penalty(candidate, size);
         if (penalty < best_penalty) {
             best_penalty = penalty;
-            best_mask = mask;
             memcpy(best_modules, candidate, sizeof(best_modules));
         }
     }
-    (void)best_mask;
 
     // Render SVG string
     int view_size = size + border_modules * 2;
