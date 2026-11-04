@@ -13,17 +13,18 @@ static void print_usage(const char *prog) {
             "c.micutu.com Pure-C CLI Client (C17)\n"
             "Usage:\n"
             "  %s shorten <url> [--slug <slug>] [--title <title>] [--tag <tags>]\n"
-            "                   [--mobile <mobile_url>] [--ttl <hours>] [--max-clicks <n>]\n"
-            "                   [--key <api_key_or_token>]\n"
+            "                   [--mobile <mobile_url>] [--alt-url <url> --alt-weight <1-99>]\n"
+            "                   [--ttl <hours>] [--max-clicks <n>] [--key <api_key_or_token>]\n"
             "  %s inspect <slug>\n"
             "  %s stats <slug>\n"
+            "  %s bio <tag>\n"
             "  %s qr <slug> [output.svg]\n"
             "  %s health\n\n"
             "Environment variables:\n"
             "  SHORTENER_HOST     Target host (default: 127.0.0.1)\n"
             "  SHORTENER_PORT     Target port (default: 8086)\n"
             "  SHORTENER_API_KEY  API Key or Scoped Creator Token (csh_...)\n",
-            prog, prog, prog, prog, prog);
+            prog, prog, prog, prog, prog, prog);
 }
 
 static int http_request(const char *host, const char *port, const char *method,
@@ -125,9 +126,9 @@ int main(int argc, char **argv) {
         return status == 200 ? 0 : 1;
     }
 
-    if (strcmp(cmd, "inspect") == 0 || strcmp(cmd, "stats") == 0) {
+    if (strcmp(cmd, "inspect") == 0 || strcmp(cmd, "stats") == 0 || strcmp(cmd, "bio") == 0) {
         if (argc < 3) {
-            fprintf(stderr, "Error: missing <slug>\n");
+            fprintf(stderr, "Error: missing identifier\n");
             return 1;
         }
         char path[256];
@@ -187,6 +188,8 @@ int main(int argc, char **argv) {
         const char *title = NULL;
         const char *tags = NULL;
         const char *mobile_url = NULL;
+        const char *alt_url = NULL;
+        int alt_weight = 0;
         int ttl_hours = 0;
         int max_clicks = 0;
 
@@ -195,6 +198,8 @@ int main(int argc, char **argv) {
             else if (strcmp(argv[i], "--title") == 0 && i + 1 < argc) title = argv[++i];
             else if (strcmp(argv[i], "--tag") == 0 && i + 1 < argc) tags = argv[++i];
             else if (strcmp(argv[i], "--mobile") == 0 && i + 1 < argc) mobile_url = argv[++i];
+            else if (strcmp(argv[i], "--alt-url") == 0 && i + 1 < argc) alt_url = argv[++i];
+            else if (strcmp(argv[i], "--alt-weight") == 0 && i + 1 < argc) alt_weight = atoi(argv[++i]);
             else if (strcmp(argv[i], "--ttl") == 0 && i + 1 < argc) ttl_hours = atoi(argv[++i]);
             else if (strcmp(argv[i], "--max-clicks") == 0 && i + 1 < argc) max_clicks = atoi(argv[++i]);
             else if (strcmp(argv[i], "--key") == 0 && i + 1 < argc) api_key = argv[++i];
@@ -211,6 +216,10 @@ int main(int argc, char **argv) {
         if (title) cJSON_AddStringToObject(payload, "title", title);
         if (tags) cJSON_AddStringToObject(payload, "tags", tags);
         if (mobile_url) cJSON_AddStringToObject(payload, "mobile_url", mobile_url);
+        if (alt_url && alt_weight > 0) {
+            cJSON_AddStringToObject(payload, "alt_url", alt_url);
+            cJSON_AddNumberToObject(payload, "alt_weight", alt_weight);
+        }
         if (ttl_hours > 0) cJSON_AddNumberToObject(payload, "ttl_hours", ttl_hours);
         if (max_clicks > 0) cJSON_AddNumberToObject(payload, "max_clicks", max_clicks);
 

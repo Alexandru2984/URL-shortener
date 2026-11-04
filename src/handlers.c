@@ -471,6 +471,13 @@ static int handle_shorten(struct MHD_Connection *connection, const char *client_
         (opts.mobile_url && !is_safe_redirect_url(opts.mobile_url, g_base_url, MAX_URL_LEN))) {
         return send_error(connection, MHD_HTTP_BAD_REQUEST, "mobile_url must be a valid public HTTP or HTTPS URL");
     }
+    if (get_optional_string(json, "alt_url", MAX_URL_LEN, &opts.alt_url) != 0 ||
+        (opts.alt_url && !is_safe_redirect_url(opts.alt_url, g_base_url, MAX_URL_LEN))) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "alt_url must be a valid public HTTP or HTTPS URL");
+    }
+    if (get_optional_int_range(json, "alt_weight", 0, 99, 0, &opts.alt_weight) != 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "alt_weight must be an integer between 0 and 99");
+    }
 
     char slug[MAX_SLUG_LEN];
     int custom_slug_requested = cJSON_IsString(custom_slug) && custom_slug->valuestring &&
@@ -763,6 +770,50 @@ static int handle_admin_cleanup(struct MHD_Connection *connection, const char *c
     return send_json_response(connection, MHD_HTTP_OK, buf);
 }
 
+static int handle_admin_bulk_action(struct MHD_Connection *connection, const char *client_ip,
+                                    cJSON *json) {
+    if (!check_admin_api_key(connection)) {
+        return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
+    }
+    if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+        return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+    }
+
+    const char *action = NULL;
+    if (get_optional_string(json, "action", 16U, &action) != 0 || !action) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "action must be enable, disable, or delete");
+    }
+
+    cJSON *slugs_arr = cJSON_GetObjectItemCaseSensitive(json, "slugs");
+    int count = cJSON_IsArray(slugs_arr) ? cJSON_GetArraySize(slugs_arr) : 0;
+    if (count < 1 || count > 50) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Provide a 'slugs' array with 1 to 50 items");
+    }
+
+    const char *slug_list[50];
+    int valid_count = 0;
+    cJSON *item = NULL;
+    cJSON_ArrayForEach(item, slugs_arr) {
+        if (cJSON_IsString(item) && item->valuestring &&
+            is_valid_slug(item->valuestring, MAX_SLUG_LENGTH)) {
+            slug_list[valid_count++] = item->valuestring;
+        }
+    }
+    if (valid_count == 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "No valid slugs provided");
+    }
+
+    int affected = bulk_admin_action(action, slug_list, valid_count);
+    if (affected < 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid bulk action");
+    }
+
+    char out[96];
+    snprintf(out, sizeof(out), "{\"status\":\"ok\",\"action\":\"%s\",\"affected\":%d}", action, affected);
+    (void)record_audit_event("link.bulk_action", "admin", action, client_ip, out);
+    return send_json_response(connection, MHD_HTTP_OK, out);
+}
+
 static int handle_inspect_page(struct MHD_Connection *connection, const char *slug,
                                const char *client_ip) {
     if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
@@ -957,7 +1008,37 @@ static int handle_qr_request(struct MHD_Connection *connection, const char *raw_
         return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Configuration error");
     }
 
-    char *svg = qr_generate_svg(full_url, 4);
+    const char *theme = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "theme");
+    const char *fg_param = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "fg");
+    const char *bg_param = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "bg");
+    const char *border_param = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "border");
+
+    const char *fg_hex = "#0f172a";
+    const char *bg_hex = "#ffffff";
+    int border = 4;
+
+    if (theme) {
+        if (strcmp(theme, "dark") == 0) { fg_hex = "#e2e8f0"; bg_hex = "#0f172a"; }
+        else if (strcmp(theme, "cyber") == 0) { fg_hex = "#38bdf8"; bg_hex = "#0b1120"; }
+        else if (strcmp(theme, "emerald") == 0) { fg_hex = "#064e3b"; bg_hex = "#ecfdf5"; }
+        else if (strcmp(theme, "sunset") == 0) { fg_hex = "#7c2d12"; bg_hex = "#fff7ed"; }
+    }
+
+    char custom_fg[8], custom_bg[8];
+    if (fg_param && strlen(fg_param) == 6U) {
+        snprintf(custom_fg, sizeof(custom_fg), "#%s", fg_param);
+        fg_hex = custom_fg;
+    }
+    if (bg_param && strlen(bg_param) == 6U) {
+        snprintf(custom_bg, sizeof(custom_bg), "#%s", bg_param);
+        bg_hex = custom_bg;
+    }
+    if (border_param && border_param[0]) {
+        int b = atoi(border_param);
+        if (b >= 1 && b <= 12) border = b;
+    }
+
+    char *svg = qr_generate_svg_themed(full_url, border, fg_hex, bg_hex);
     if (!svg) {
         return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Could not generate QR SVG");
     }
@@ -1066,6 +1147,20 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         (void)record_audit_event("admin.export_csv", "admin", NULL, client_ip, "Exported links CSV");
         return send_dynamic_buffer(connection, MHD_HTTP_OK, csv, "text/csv; charset=utf-8",
                                    "attachment; filename=\"shortener-links.csv\"");
+    }
+
+    if (strcmp(url, "/api/admin/backup.json") == 0) {
+        if (!check_admin_api_key(connection)) {
+            return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
+        }
+        if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+            return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+        }
+        char *backup = export_links_backup_json();
+        if (!backup) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Database error");
+        (void)record_audit_event("admin.backup_json", "admin", NULL, client_ip, "Exported JSON snapshot backup");
+        return send_dynamic_buffer(connection, MHD_HTTP_OK, backup, "application/json; charset=utf-8",
+                                   "attachment; filename=\"shortener-backup.json\"");
     }
 
     if (strcmp(url, "/api/admin/tokens") == 0) {
@@ -1366,6 +1461,8 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
             ret = handle_admin_create_token(connection, client_ip, json);
         } else if (strcasecmp(method, "POST") == 0 && strcmp(url, "/api/admin/cleanup") == 0) {
             ret = handle_admin_cleanup(connection, client_ip);
+        } else if (strcasecmp(method, "POST") == 0 && strcmp(url, "/api/admin/bulk-action") == 0) {
+            ret = handle_admin_bulk_action(connection, client_ip, json);
         } else if (strncmp(url, "/api/admin/links/", 17) == 0) {
             ret = handle_admin_update_link(connection, client_ip, url + 17, json);
         } else {

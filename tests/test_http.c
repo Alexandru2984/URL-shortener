@@ -199,9 +199,11 @@ int main(void) {
                   "{\"url\":\"https://example.test/landing\",\"custom_slug\":\"e2e-slug\",\"max_clicks\":1,\"title\":\"E2E\",\"tags\":\"ci,e2e\"}",
                   resp, sizeof(resp)) == 201);
 
-        // 5. QR SVG, Link Inspector, Redirect & 1-Click Burn limit
+        // 5. QR SVG (including themed QR), Link Inspector, Redirect & 1-Click Burn limit
         CHECK(send_http_request(port, "GET", "/qr/e2e-slug.svg", NULL, NULL, resp, sizeof(resp)) == 200);
         CHECK(strstr(resp, "<svg xmlns=\"http://www.w3.org/2000/svg\"") != NULL);
+        CHECK(send_http_request(port, "GET", "/qr/e2e-slug.svg?theme=cyber", NULL, NULL, resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "fill=\"#38bdf8\"") != NULL);
 
         CHECK(send_http_request(port, "GET", "/api/inspect/e2e-slug", NULL, NULL, resp, sizeof(resp)) == 200);
         CHECK(strstr(resp, "https://example.test/landing") != NULL);
@@ -248,6 +250,14 @@ int main(void) {
         CHECK(strstr(resp, "shortener_links_total") != NULL);
         CHECK(send_http_request(port, "GET", "/api/admin/system", admin_key, NULL, resp, sizeof(resp)) == 200);
         CHECK(strstr(resp, "\"sqlite_version\"") != NULL);
+        CHECK(send_http_request(port, "GET", "/api/admin/backup.json", admin_key, NULL, resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "\"c.micutu.com-snapshot-v1\"") != NULL);
+        CHECK(send_http_request(
+                  port, "POST", "/api/admin/bulk-action", admin_key,
+                  "{\"action\":\"disable\",\"slugs\":[\"bulk-1\",\"bulk-2\"]}",
+                  resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "\"affected\":2") != NULL);
+        CHECK(send_http_request(port, "GET", "/bulk-1", NULL, NULL, resp, sizeof(resp)) == 410);
 
         CHECK(send_http_request(port, "DELETE", "/e2e-slug", admin_key, NULL, resp, sizeof(resp)) == 200);
         CHECK(send_http_request(port, "GET", "/e2e-slug", NULL, NULL, resp, sizeof(resp)) == 404);

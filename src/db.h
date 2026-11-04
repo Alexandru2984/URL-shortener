@@ -15,6 +15,8 @@ struct link_options {
     const char *tags;
     const char *mobile_url;
     const char *idempotency_key;
+    const char *alt_url;
+    int alt_weight;
 };
 
 int init_db(const char *db_path, const char *analytics_hmac_key);
@@ -45,6 +47,7 @@ char *get_system_diagnostics_json(long uptime_seconds);
 
 int check_rate_limit(const char *ip, int max_requests_per_min);
 int delete_link(const char *slug);
+int bulk_admin_action(const char *action, const char *const *slugs, int slug_count);
 int cleanup_expired_links(void);
 int cleanup_old_analytics(int retention_days);
 
@@ -60,11 +63,12 @@ int record_audit_event(const char *event_type, const char *actor,
                        const char *target, const char *ip, const char *details);
 char *get_audit_logs_json(int limit);
 
-// Admin: query links as JSON string or export as CSV (caller must free)
+// Admin: query links as JSON string, backup JSON, or export as CSV (caller must free)
 char *get_all_links_json(void);
 char *query_admin_links_json(const char *search, const char *tag,
                              const char *status_filter, int limit, int offset);
 char *export_links_csv(void);
+char *export_links_backup_json(void);
 
 void close_db(void);
 

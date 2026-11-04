@@ -56,6 +56,10 @@
 "        <h2>Daily Activity (Last 14 Days)</h2>\n" \
 "        <div id=\"dailyList\"><p class=\"hint\">No recent daily visits recorded.</p></div>\n" \
 "      </div>\n" \
+"      <div class=\"panel\">\n" \
+"        <h2>24-Hour Traffic Distribution (UTC)</h2>\n" \
+"        <div id=\"hourlyList\"><p class=\"hint\">No hourly activity recorded yet.</p></div>\n" \
+"      </div>\n" \
 "      <div class=\"actions\">\n" \
 "        <a class=\"btn\" href=\"/\">&larr; Back to Shortener</a>\n" \
 "        <a class=\"btn\" href=\"/api/stats/%s\" target=\"_blank\">View Raw JSON</a>\n" \

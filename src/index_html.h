@@ -81,6 +81,10 @@
 "              <label for=\"mobileUrl\">Mobile Deep-Link / Smart Target URL (optional)</label>\n" \
 "              <input id=\"mobileUrl\" type=\"url\" autocomplete=\"off\" placeholder=\"https://m.example.com/app-landing\">\n" \
 "            </div>\n" \
+"            <div class=\"row\">\n" \
+"              <div class=\"field\"><label for=\"altUrl\">A/B Split Variant B URL (optional)</label><input id=\"altUrl\" type=\"url\" autocomplete=\"off\" placeholder=\"https://example.com/landing-v2\"></div>\n" \
+"              <div class=\"field\"><label for=\"altWeight\">Variant B Traffic % (1-99)</label><input id=\"altWeight\" type=\"number\" min=\"1\" max=\"99\" placeholder=\"50\"></div>\n" \
+"            </div>\n" \
 "            <div class=\"row-3\">\n" \
 "              <div class=\"field\"><label for=\"utmSource\">UTM Source</label><input id=\"utmSource\" type=\"text\" autocomplete=\"off\" placeholder=\"newsletter\"></div>\n" \
 "              <div class=\"field\"><label for=\"utmMedium\">UTM Medium</label><input id=\"utmMedium\" type=\"text\" autocomplete=\"off\" placeholder=\"social\"></div>\n" \

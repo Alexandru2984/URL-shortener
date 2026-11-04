@@ -629,13 +629,28 @@
 "    left.append(label, link, actions);\n" \
 "    grid.append(left);\n" \
 "    if (slug) {\n" \
+"      const qrWrap = document.createElement('div');\n" \
 "      const qrBox = document.createElement('div');\n" \
 "      qrBox.className = 'qr-preview';\n" \
 "      const qrImg = document.createElement('img');\n" \
 "      qrImg.src = '/qr/' + encodeURIComponent(slug) + '.svg';\n" \
 "      qrImg.alt = 'QR Code for ' + slug;\n" \
 "      qrBox.append(qrImg);\n" \
-"      grid.append(qrBox);\n" \
+"      const themeSelect = document.createElement('select');\n" \
+"      themeSelect.className = 'btn-sm';\n" \
+"      for (const [val, labelTxt] of [['', 'QR: Classic'], ['cyber', 'QR: Cyber'], ['dark', 'QR: Dark'], ['emerald', 'QR: Emerald'], ['sunset', 'QR: Sunset']]) {\n" \
+"        const opt = document.createElement('option');\n" \
+"        opt.value = val;\n" \
+"        opt.textContent = labelTxt;\n" \
+"        themeSelect.append(opt);\n" \
+"      }\n" \
+"      themeSelect.addEventListener('change', () => {\n" \
+"        const t = themeSelect.value;\n" \
+"        const qrUrl = '/qr/' + encodeURIComponent(slug) + '.svg' + (t ? '?theme=' + encodeURIComponent(t) : '');\n" \
+"        qrImg.src = qrUrl;\n" \
+"      });\n" \
+"      qrWrap.append(qrBox, themeSelect);\n" \
+"      grid.append(qrWrap);\n" \
 "      sessionLinks.unshift({ slug, shortUrl });\n" \
 "      if (sessionLinks.length > 8) sessionLinks.pop();\n" \
 "      renderSessionHistory();\n" \
@@ -661,6 +676,8 @@
 "      const title = byId('title') ? byId('title').value.trim() : '';\n" \
 "      const tags = byId('tags') ? byId('tags').value.trim() : '';\n" \
 "      const mobileUrl = byId('mobileUrl') ? byId('mobileUrl').value.trim() : '';\n" \
+"      const altUrl = byId('altUrl') ? byId('altUrl').value.trim() : '';\n" \
+"      const altWeight = byId('altWeight') ? Number(byId('altWeight').value || 0) : 0;\n" \
 "      const utmSource = byId('utmSource') ? byId('utmSource').value.trim() : '';\n" \
 "      const utmMedium = byId('utmMedium') ? byId('utmMedium').value.trim() : '';\n" \
 "      const utmCampaign = byId('utmCampaign') ? byId('utmCampaign').value.trim() : '';\n" \
@@ -686,6 +703,7 @@
 "      if (title) payload.title = title;\n" \
 "      if (tags) payload.tags = tags;\n" \
 "      if (mobileUrl) payload.mobile_url = mobileUrl;\n" \
+"      if (altUrl && altWeight > 0) { payload.alt_url = altUrl; payload.alt_weight = altWeight; }\n" \
 "      if (utmSource) payload.utm_source = utmSource;\n" \
 "      if (utmMedium) payload.utm_medium = utmMedium;\n" \
 "      if (utmCampaign) payload.utm_campaign = utmCampaign;\n" \
@@ -714,6 +732,8 @@
 "        if (byId('title')) byId('title').value = '';\n" \
 "        if (byId('tags')) byId('tags').value = '';\n" \
 "        if (byId('mobileUrl')) byId('mobileUrl').value = '';\n" \
+"        if (byId('altUrl')) byId('altUrl').value = '';\n" \
+"        if (byId('altWeight')) byId('altWeight').value = '';\n" \
 "        if (byId('utmSource')) byId('utmSource').value = '';\n" \
 "        if (byId('utmMedium')) byId('utmMedium').value = '';\n" \
 "        if (byId('utmCampaign')) byId('utmCampaign').value = '';\n" \
@@ -966,6 +986,32 @@
 "          refBox.append(r);\n" \
 "        }\n" \
 "      }\n" \
+"      const hourBox = byId('hourlyList');\n" \
+"      if (hourBox && Array.isArray(data.hourly) && data.hourly.length === 24) {\n" \
+"        let maxH = 0;\n" \
+"        for (const h of data.hourly) { if (h > maxH) maxH = h; }\n" \
+"        if (maxH > 0) {\n" \
+"          hourBox.replaceChildren();\n" \
+"          for (let h = 0; h < 24; h++) {\n" \
+"            const cnt = data.hourly[h] || 0;\n" \
+"            if (cnt === 0) continue;\n" \
+"            const wrap = document.createElement('div');\n" \
+"            wrap.className = 'field';\n" \
+"            const row = document.createElement('div');\n" \
+"            row.className = 'list-row';\n" \
+"            const sHr = document.createElement('span');\n" \
+"            sHr.textContent = String(h).padStart(2, '0') + ':00 - ' + String(h).padStart(2, '0') + ':59 UTC';\n" \
+"            const sCnt = document.createElement('strong');\n" \
+"            sCnt.textContent = cnt + ' visits';\n" \
+"            row.append(sHr, sCnt);\n" \
+"            const prog = document.createElement('progress');\n" \
+"            prog.max = maxH;\n" \
+"            prog.value = cnt;\n" \
+"            wrap.append(row, prog);\n" \
+"            hourBox.append(wrap);\n" \
+"          }\n" \
+"        }\n" \
+"      }\n" \
 "    } catch (e) {}\n" \
 "  }\n" \
 "  loadDetailedStats();\n" \
@@ -1035,6 +1081,7 @@
 "    else addBadge('Active', 'ok');\n" \
 "    if (link.has_password) addBadge('Password', '');\n" \
 "    if (text(link.mobile_url)) addBadge('Mobile Route', 'tag');\n" \
+"    if (text(link.alt_url) && count(link.alt_weight) > 0) addBadge('A/B ' + count(link.alt_weight) + '%', 'tag');\n" \
 "    if (count(link.max_clicks) > 0) addBadge('Max ' + count(link.max_clicks), '');\n" \
 "    if (text(link.expires_at)) addBadge('Exp ' + text(link.expires_at).slice(0, 10), 'exp');\n" \
 "    if (text(link.tags)) {\n" \
@@ -1317,6 +1364,27 @@
 "        URL.revokeObjectURL(url);\n" \
 "      } catch (e) {\n" \
 "        setStatus(dashboardStatus, 'CSV export failed.');\n" \
+"      }\n" \
+"    });\n" \
+"  }\n" \
+"\n" \
+"  if (byId('exportJson')) {\n" \
+"    byId('exportJson').addEventListener('click', async () => {\n" \
+"      if (!apiKey) return;\n" \
+"      try {\n" \
+"        const res = await fetch('/api/admin/backup.json', { headers: headers(false) });\n" \
+"        if (!res.ok) throw new Error('Backup failed');\n" \
+"        const blob = await res.blob();\n" \
+"        const url = URL.createObjectURL(blob);\n" \
+"        const a = document.createElement('a');\n" \
+"        a.href = url;\n" \
+"        a.download = 'shortener-backup.json';\n" \
+"        document.body.append(a);\n" \
+"        a.click();\n" \
+"        a.remove();\n" \
+"        URL.revokeObjectURL(url);\n" \
+"      } catch (e) {\n" \
+"        setStatus(dashboardStatus, 'JSON backup export failed.');\n" \
 "      }\n" \
 "    });\n" \
 "  }\n" \

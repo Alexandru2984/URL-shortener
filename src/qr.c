@@ -192,9 +192,22 @@ static int compute_penalty(const uint8_t modules[QR_MAX_SIZE][QR_MAX_SIZE], int 
     return penalty;
 }
 
-char *qr_generate_svg(const char *text, int border_modules) {
+static int is_valid_hex_color(const char *color) {
+    if (!color || color[0] != '#' || strlen(color) != 7U) return 0;
+    for (size_t i = 1U; i < 7U; i++) {
+        char c = color[i];
+        int is_hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+        if (!is_hex) return 0;
+    }
+    return 1;
+}
+
+char *qr_generate_svg_themed(const char *text, int border_modules,
+                             const char *fg_hex, const char *bg_hex) {
     if (!text || !text[0]) return NULL;
     if (border_modules < 1 || border_modules > 16) border_modules = 4;
+    const char *safe_fg = is_valid_hex_color(fg_hex) ? fg_hex : "#0f172a";
+    const char *safe_bg = is_valid_hex_color(bg_hex) ? bg_hex : "#ffffff";
 
     size_t text_len = strlen(text);
     const struct qr_version_spec *spec = NULL;
@@ -330,9 +343,9 @@ char *qr_generate_svg(const char *text, int border_modules) {
         svg, max_svg_len,
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 %d %d\" "
         "shape-rendering=\"crispEdges\" role=\"img\" aria-label=\"QR Code\">"
-        "<rect width=\"100%%\" height=\"100%%\" fill=\"#ffffff\"/>"
-        "<path fill=\"#0f172a\" d=\"",
-        view_size, view_size);
+        "<rect width=\"100%%\" height=\"100%%\" fill=\"%s\"/>"
+        "<path fill=\"%s\" d=\"",
+        view_size, view_size, safe_bg, safe_fg);
     if (offset < 0 || (size_t)offset >= max_svg_len) {
         free(svg);
         return NULL;
@@ -358,4 +371,8 @@ char *qr_generate_svg(const char *text, int border_modules) {
         return NULL;
     }
     return svg;
+}
+
+char *qr_generate_svg(const char *text, int border_modules) {
+    return qr_generate_svg_themed(text, border_modules, "#0f172a", "#ffffff");
 }

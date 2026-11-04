@@ -124,6 +124,21 @@ int main(void) {
     CHECK(svg_v6 != NULL);
     free(svg_v6);
 
+    char *svg_themed = qr_generate_svg_themed("https://c.micutu.com/cyber", 4, "#38bdf8", "#0b1120");
+    CHECK(svg_themed != NULL);
+    if (svg_themed) {
+        CHECK(strstr(svg_themed, "fill=\"#0b1120\"") != NULL);
+        CHECK(strstr(svg_themed, "fill=\"#38bdf8\"") != NULL);
+        free(svg_themed);
+    }
+    char *svg_bad_color = qr_generate_svg_themed("https://c.micutu.com/safe", 4, "\"><script>", "bad");
+    CHECK(svg_bad_color != NULL);
+    if (svg_bad_color) {
+        CHECK(strstr(svg_bad_color, "<script>") == NULL);
+        CHECK(strstr(svg_bad_color, "fill=\"#0f172a\"") != NULL);
+        free(svg_bad_color);
+    }
+
     CHECK(qr_generate_svg("", 4) == NULL);
 
     char password_hash[128];

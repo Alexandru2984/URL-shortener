@@ -58,6 +58,7 @@
 "            <button id=\"filterBtn\" type=\"button\" class=\"primary-inline\">Filter</button>\n" \
 "            <button id=\"refresh\" type=\"button\">Refresh</button>\n" \
 "            <button id=\"exportCsv\" type=\"button\">Export CSV</button>\n" \
+"            <button id=\"exportJson\" type=\"button\">Backup JSON</button>\n" \
 "            <button id=\"cleanupBtn\" type=\"button\">Purge Expired</button>\n" \
 "            <button id=\"lock\" type=\"button\" class=\"danger\">Lock</button>\n" \
 "          </div>\n" \

@@ -7,8 +7,9 @@ A high-performance, security-hardened URL shortener, native SVG QR code generato
 - **Cryptographic Slugs, Idempotency & Custom Aliases**:
   - Unbiased CSPRNG (`RAND_bytes`) short slugs or normalized custom slugs with reserved-route protection.
   - Safe API retry support via `Idempotency-Key` request headers (`X-Idempotency-Key` / `Idempotency-Key`).
-- **Smart Device Routing, UTM Campaign Builder & Bulk Creation**:
+- **Smart Device Routing, A/B Split Testing, UTM Campaign Builder & Bulk Creation**:
   - **Mobile Deep-Links (`mobile_url`)**: Automatically routes mobile User-Agents to an optional mobile/app destination while desktop visitors receive the primary URL.
+  - **Cryptographic A/B Split Testing (`alt_url` & `alt_weight`)**: Unbiased CSPRNG (`RAND_bytes` rejection-sampled `0..99`) weighted traffic splitting between Variant A (`url`) and Variant B (`alt_url`, `1..99%`).
   - **Native UTM Builder**: Automatically URL-encodes and appends `utm_source`, `utm_medium`, and `utm_campaign` parameters before storing the link, preserving fragment identifiers (`#...`).
   - **Batch Shortening (`POST /api/bulk/shorten`)**: Shorten up to 25 links in a single request via UI or API.
 - **Social OpenGraph Cards & Link-in-Bio Micro-Hubs**:
@@ -42,16 +43,18 @@ Send the master Admin API key or a Scoped Creator Token (`csh_...`) in the `X-AP
 | `GET /bio/<tag>` | Public | Responsive Link-in-Bio micro-hub listing active public links for `<tag>` |
 | `GET /api/bio/<tag>` | Public | JSON Link-in-Bio collection for `<tag>` |
 | `POST /unlock/<slug>` | Public | Unlock a password-protected link with JSON `{ "password": "..." }` |
-| `GET /qr/<slug>.svg` | Public | Generate a crisp SVG QR code for the short link in pure C |
+| `GET /qr/<slug>.svg` | Public | Generate a crisp SVG QR code in pure C (supports `?theme=cyber\|dark\|emerald\|sunset`, `?fg=RRGGBB&bg=RRGGBB`, `?border=1..12`) |
 | `GET /inspect/<slug>` | Public | Interactive Link Inspector page |
 | `GET /api/inspect/<slug>` | Public | JSON link safety & metadata inspection |
-| `GET /stats/<slug>` | Public | Interactive link analytics dashboard |
-| `GET /api/stats/<slug>` | Public | JSON analytics (14-day series, devices, referrers, remaining clicks) |
+| `GET /stats/<slug>` | Public | Interactive link analytics dashboard (14-day series, 24h UTC heatmap, devices, referrers) |
+| `GET /api/stats/<slug>` | Public | JSON analytics (14-day series, 24h UTC `hourly` distribution, devices, referrers, remaining clicks) |
 | `GET /admin` | Public HTML (In-memory key) | Responsive Admin Dashboard (Links, Creator Tokens, Audit Log, System & Metrics) |
 | `GET /api/admin/links` | Admin Key | List/filter links (`?q=`, `?tag=`, `?status=active\|expired\|disabled`) |
 | `PUT /api/admin/links/<slug>` | Admin Key | Edit link URL, mobile URL, title, tags, TTL, max clicks, active status, or password |
+| `POST /api/admin/bulk-action` | Admin Key | Atomic batch admin action (`{"action":"enable"\|"disable"\|"delete","slugs":[...]}`) |
 | `DELETE /<slug>` | Admin Key | Delete a link and its visit records |
 | `GET /api/admin/export.csv` | Admin Key | Export links & metrics as formula-sanitized RFC 4180 CSV |
+| `GET /api/admin/backup.json` | Admin Key | Export full JSON snapshot backup (`c.micutu.com-snapshot-v1`) |
 | `GET /api/admin/tokens` | Admin Key | List scoped creator tokens |
 | `POST /api/admin/tokens` | Admin Key | Create a scoped creator token (`name`, optional `ttl_days`) |
 | `DELETE /api/admin/tokens/<id>` | Admin Key | Revoke a scoped creator token |

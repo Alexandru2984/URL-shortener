@@ -113,20 +113,21 @@ int main(void) {
     CHECK(total == 2 && unique == 1);
 
     // Test 1-click self-destruct link (max_clicks = 1) and scheduled link
-    struct link_options burn_opts = { 0, 1, 0, NULL, "One-time secret", "burn,security", NULL, NULL };
+    struct link_options burn_opts = { 0, 1, 0, NULL, "One-time secret", "burn,security", NULL, NULL, NULL, 0 };
     CHECK(insert_link_ex("burn-once", "https://example.test/secret-doc", &burn_opts) == 0);
     CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == 0);
     CHECK(record_visit_ex("burn-once", "203.0.113.5", "desktop", "direct") == 0);
     CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == -3);
 
-    struct link_options sched_opts = { 0, 0, 24, NULL, "Future launch", "launch", NULL, NULL };
+    struct link_options sched_opts = { 0, 0, 24, NULL, "Future launch", "launch", NULL, NULL, NULL, 0 };
     CHECK(insert_link_ex("future-link", "https://example.test/launch", &sched_opts) == 0);
     CHECK(get_link("future-link", target, sizeof(target), &requires_password) == -5);
 
-    // Test smart device routing (mobile_url) & idempotency key lookup
+    // Test smart device routing (mobile_url), A/B split testing & idempotency key lookup
     struct link_options smart_opts = {
         0, 0, 0, NULL, "Smart App Link", "launch,mobile",
-        "https://m.example.test/app", "idem-key-2026-001"
+        "https://m.example.test/app", "idem-key-2026-001",
+        "https://example.test/variant-b", 50
     };
     CHECK(insert_link_ex("smart-app", "https://example.test/desktop", &smart_opts) == 0);
     char idem_slug[64];
@@ -134,9 +135,24 @@ int main(void) {
     CHECK(strcmp(idem_slug, "smart-app") == 0);
     CHECK(find_slug_by_idempotency_key("non-existent-idem", idem_slug, sizeof(idem_slug)) == -1);
     CHECK(get_link_for_device("smart-app", "desktop", target, sizeof(target), &requires_password) == 0);
-    CHECK(strcmp(target, "https://example.test/desktop") == 0);
+    CHECK(strcmp(target, "https://example.test/desktop") == 0 ||
+          strcmp(target, "https://example.test/variant-b") == 0);
     CHECK(get_link_for_device("smart-app", "mobile", target, sizeof(target), &requires_password) == 0);
     CHECK(strcmp(target, "https://m.example.test/app") == 0);
+
+    // Test bulk admin action & JSON snapshot backup
+    const char *bulk_slugs[1] = { "smart-app" };
+    CHECK(bulk_admin_action("disable", bulk_slugs, 1) == 1);
+    CHECK(get_link("smart-app", target, sizeof(target), &requires_password) == -6);
+    CHECK(bulk_admin_action("enable", bulk_slugs, 1) == 1);
+    CHECK(get_link("smart-app", target, sizeof(target), &requires_password) == 0);
+
+    char *backup_json = export_links_backup_json();
+    CHECK(backup_json != NULL);
+    if (backup_json) {
+        CHECK(strstr(backup_json, "\"c.micutu.com-snapshot-v1\"") != NULL);
+        free(backup_json);
+    }
 
     // Test Link-in-Bio collection JSON, Prometheus metrics, and System diagnostics JSON
     char *bio_json = get_bio_collection_json("mobile");
