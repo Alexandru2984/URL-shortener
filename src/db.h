@@ -21,6 +21,7 @@ struct link_options {
     int redirect_code;
     const char *geo_country;
     const char *geo_url;
+    int interstitial;
 };
 
 int init_db(const char *db_path, const char *analytics_hmac_key);
@@ -50,7 +51,9 @@ int record_visit_geo(const char *slug, const char *ip,
                      const char *country_code);
 
 int get_stats(const char *slug, int *total_visits, int *unique_visits);
+int is_interstitial_link(const char *slug);
 char *get_detailed_stats_json(const char *slug);
+char *export_slug_analytics_csv(const char *slug);
 char *get_link_inspect_json(const char *slug);
 char *get_bio_collection_json(const char *profile);
 

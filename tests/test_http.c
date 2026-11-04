@@ -275,6 +275,22 @@ int main(void) {
         CHECK(send_http_request(port, "POST", "/api/admin/maintenance", admin_key, "{}", resp, sizeof(resp)) == 200);
         CHECK(strstr(resp, "\"wal_checkpointed\"") != NULL);
 
+        // 9. Interstitial safety preview mode & per-link analytics CSV export
+        CHECK(send_http_request(
+                  port, "POST", "/shorten", admin_key,
+                  "{\"url\":\"https://example.test/safe-preview\",\"custom_slug\":\"preview-me\",\"interstitial\":true}",
+                  resp, sizeof(resp)) == 201);
+        CHECK(send_http_request(port, "GET", "/preview-me", NULL, NULL, resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "Location:") == NULL);
+        CHECK(send_http_request(port, "GET", "/preview-me?direct=1", NULL, NULL, resp, sizeof(resp)) == 302);
+        CHECK(strstr(resp, "Location: https://example.test/safe-preview") != NULL);
+        CHECK(send_http_request(port, "GET", "/api/inspect/preview-me", NULL, NULL, resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "\"interstitial\":true") != NULL);
+        CHECK(send_http_request(port, "GET", "/api/stats/preview-me/export.csv", NULL, NULL, resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "text/csv") != NULL);
+        CHECK(strstr(resp, "category,dimension,visits,unique_visitors") != NULL);
+        CHECK(send_http_request(port, "GET", "/api/stats/missing-xyz/export.csv", NULL, NULL, resp, sizeof(resp)) == 404);
+
         CHECK(send_http_request(port, "DELETE", "/e2e-slug", admin_key, NULL, resp, sizeof(resp)) == 200);
         CHECK(send_http_request(port, "GET", "/e2e-slug", NULL, NULL, resp, sizeof(resp)) == 404);
 

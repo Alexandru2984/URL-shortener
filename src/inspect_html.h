@@ -40,7 +40,7 @@
 "        <div class=\"list-row\"><span class=\"hint\">Expires (UTC)</span><strong>%s</strong></div>\n" \
 "      </div>\n" \
 "      <div class=\"actions\">\n" \
-"        <a class=\"btn primary-inline\" href=\"/%s\" rel=\"noopener noreferrer\">Proceed to /%s &rarr;</a>\n" \
+"        <a class=\"btn primary-inline\" href=\"/%s?direct=1\" rel=\"noopener noreferrer\">Proceed to /%s &rarr;</a>\n" \
 "        <a class=\"btn\" href=\"/stats/%s\">Analytics</a>\n" \
 "        <a class=\"btn\" href=\"/\">Back Home</a>\n" \
 "      </div>\n" \
@@ -75,7 +75,7 @@
 "      <p class=\"subtitle\">Destination host: <strong>%s</strong></p>\n" \
 "      <div class=\"qr-preview\"><img src=\"/qr/%s.svg\" alt=\"QR Code\"></div>\n" \
 "      <div class=\"field\">\n" \
-"        <a class=\"btn primary\" href=\"/%s\" rel=\"noopener noreferrer\">Continue to Destination &rarr;</a>\n" \
+"        <a class=\"btn primary\" href=\"/%s?direct=1\" rel=\"noopener noreferrer\">Continue to Destination &rarr;</a>\n" \
 "      </div>\n" \
 "      <div class=\"actions\">\n" \
 "        <a class=\"btn btn-sm\" href=\"/inspect/%s\">Full Security Inspect</a>\n" \

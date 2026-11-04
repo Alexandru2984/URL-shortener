@@ -46,6 +46,13 @@ static long get_uptime_seconds(void) {
 #define STATS_RATE_LIMIT 60
 #define ADMIN_RATE_LIMIT 30
 
+static int scoped_rate_limit(const char *scope, const char *ip, int max_per_min) {
+    if (!ip || !ip[0]) return -1;
+    char key[128];
+    snprintf(key, sizeof(key), "%s:%s", scope ? scope : "default", ip);
+    return check_rate_limit(key, max_per_min);
+}
+
 // Set by main() from the API_KEY and BASE_URL environment variables.
 const char *g_api_key = NULL;
 const char *g_base_url = "https://c.micutu.com";
@@ -408,7 +415,7 @@ static int handle_shorten(struct MHD_Connection *connection, const char *client_
         (void)record_audit_event("auth.failed", "anonymous", "/shorten", client_ip, "Invalid API key or token");
         return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
     }
-    if (check_rate_limit(client_ip, CREATE_RATE_LIMIT) != 0) {
+    if (scoped_rate_limit("create", client_ip, CREATE_RATE_LIMIT) != 0) {
         return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
     }
 
@@ -502,6 +509,8 @@ static int handle_shorten(struct MHD_Connection *connection, const char *client_
         (opts.geo_url && !is_safe_redirect_url(opts.geo_url, g_base_url, MAX_URL_LEN))) {
         return send_error(connection, MHD_HTTP_BAD_REQUEST, "geo_url must be a valid public HTTP or HTTPS URL");
     }
+    const cJSON *inter_item = cJSON_GetObjectItemCaseSensitive(json, "interstitial");
+    opts.interstitial = (inter_item && (cJSON_IsTrue(inter_item) || (cJSON_IsNumber(inter_item) && inter_item->valueint != 0))) ? 1 : 0;
 
     char slug[MAX_SLUG_LEN];
     int custom_slug_requested = cJSON_IsString(custom_slug) && custom_slug->valuestring &&
@@ -543,7 +552,7 @@ static int handle_bulk_shorten(struct MHD_Connection *connection, const char *cl
     if (!check_create_permission(connection, actor, sizeof(actor))) {
         return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
     }
-    if (check_rate_limit(client_ip, CREATE_RATE_LIMIT) != 0) {
+    if (scoped_rate_limit("create", client_ip, CREATE_RATE_LIMIT) != 0) {
         return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
     }
 
@@ -681,7 +690,7 @@ static int handle_admin_update_link(struct MHD_Connection *connection, const cha
         (void)record_audit_event("auth.failed", "anonymous", slug, client_ip, "Admin update unauthorized");
         return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
     }
-    if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+    if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
         return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
     }
     if (!is_valid_slug(slug, MAX_SLUG_LENGTH) || is_reserved_slug(slug)) {
@@ -743,7 +752,7 @@ static int handle_admin_create_token(struct MHD_Connection *connection, const ch
     if (!check_admin_api_key(connection)) {
         return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
     }
-    if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+    if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
         return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
     }
 
@@ -781,7 +790,7 @@ static int handle_admin_cleanup(struct MHD_Connection *connection, const char *c
     if (!check_admin_api_key(connection)) {
         return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
     }
-    if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+    if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
         return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
     }
 
@@ -799,7 +808,7 @@ static int handle_admin_bulk_action(struct MHD_Connection *connection, const cha
     if (!check_admin_api_key(connection)) {
         return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
     }
-    if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+    if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
         return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
     }
 
@@ -843,7 +852,7 @@ static int handle_admin_restore(struct MHD_Connection *connection, const char *c
     if (!check_admin_api_key(connection)) {
         return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
     }
-    if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+    if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
         return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
     }
 
@@ -863,7 +872,7 @@ static int handle_admin_maintenance(struct MHD_Connection *connection, const cha
     if (!check_admin_api_key(connection)) {
         return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
     }
-    if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+    if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
         return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
     }
 
@@ -882,7 +891,7 @@ static int handle_inspect_page(struct MHD_Connection *connection, const char *sl
     if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
         return send_error_page(connection, MHD_HTTP_BAD_REQUEST, "Bad Request", "The link identifier is invalid.");
     }
-    if (check_rate_limit(client_ip, STATS_RATE_LIMIT) != 0) {
+    if (scoped_rate_limit("read", client_ip, STATS_RATE_LIMIT) != 0) {
         return send_error_page(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Too Many Requests", "Please wait a moment and try again.");
     }
 
@@ -936,7 +945,7 @@ static int handle_social_preview_page(struct MHD_Connection *connection, const c
     if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
         return send_error_page(connection, MHD_HTTP_BAD_REQUEST, "Bad Request", "The link identifier is invalid.");
     }
-    if (check_rate_limit(client_ip, STATS_RATE_LIMIT) != 0) {
+    if (scoped_rate_limit("read", client_ip, STATS_RATE_LIMIT) != 0) {
         return send_error_page(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Too Many Requests", "Please wait a moment.");
     }
 
@@ -979,7 +988,7 @@ static int handle_bio_page(struct MHD_Connection *connection, const char *profil
     if (!is_valid_slug(profile, 24U)) {
         return send_error_page(connection, MHD_HTTP_BAD_REQUEST, "Bad Request", "Invalid profile handle.");
     }
-    if (check_rate_limit(client_ip, STATS_RATE_LIMIT) != 0) {
+    if (scoped_rate_limit("read", client_ip, STATS_RATE_LIMIT) != 0) {
         return send_error_page(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Too Many Requests", "Please wait a moment.");
     }
 
@@ -1054,7 +1063,7 @@ static int handle_qr_request(struct MHD_Connection *connection, const char *raw_
     if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
         return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid slug");
     }
-    if (check_rate_limit(client_ip, STATS_RATE_LIMIT) != 0) {
+    if (scoped_rate_limit("read", client_ip, STATS_RATE_LIMIT) != 0) {
         return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
     }
 
@@ -1127,7 +1136,7 @@ static int handle_badge_request(struct MHD_Connection *connection, const char *r
     if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
         return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid slug");
     }
-    if (check_rate_limit(client_ip, STATS_RATE_LIMIT) != 0) {
+    if (scoped_rate_limit("read", client_ip, STATS_RATE_LIMIT) != 0) {
         return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
     }
 
@@ -1254,6 +1263,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
                  "    \"/badge/{slug}.svg\": { \"get\": { \"summary\": \"Generate dynamic shields-style SVG analytics badge\" } },\n"
                  "    \"/api/inspect/{slug}\": { \"get\": { \"summary\": \"Inspect link safety, routing policies, and metadata\" } },\n"
                  "    \"/api/stats/{slug}\": { \"get\": { \"summary\": \"Query privacy-preserving link analytics, 24h heatmap, and countries\" } },\n"
+                 "    \"/api/stats/{slug}/export.csv\": { \"get\": { \"summary\": \"Export per-link analytics (daily, country, device) as CSV\" } },\n"
                  "    \"/api/bio/{tag}\": { \"get\": { \"summary\": \"Query Link-in-Bio public collection\" } },\n"
                  "    \"/api/admin/links\": { \"get\": { \"summary\": \"Query and filter links\" } },\n"
                  "    \"/api/admin/bulk-action\": { \"post\": { \"summary\": \"Batch enable, disable, reset clicks, or delete links\" } },\n"
@@ -1313,7 +1323,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         if (!check_admin_api_key(connection)) {
             return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
         }
-        if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+        if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
             return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
         }
 
@@ -1331,7 +1341,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         if (!check_admin_api_key(connection)) {
             return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
         }
-        if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+        if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
             return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
         }
         char *csv = export_links_csv();
@@ -1345,7 +1355,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         if (!check_admin_api_key(connection)) {
             return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
         }
-        if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+        if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
             return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
         }
         char *backup = export_links_backup_json();
@@ -1359,7 +1369,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         if (!check_admin_api_key(connection)) {
             return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
         }
-        if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+        if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
             return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
         }
         char *json = list_api_tokens_json();
@@ -1373,7 +1383,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         if (!check_admin_api_key(connection)) {
             return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
         }
-        if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+        if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
             return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
         }
         char *json = get_audit_logs_json(100);
@@ -1387,7 +1397,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         if (!check_admin_api_key(connection)) {
             return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
         }
-        if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+        if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
             return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
         }
         char *json = get_system_diagnostics_json(get_uptime_seconds());
@@ -1401,7 +1411,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         if (!check_admin_api_key(connection)) {
             return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
         }
-        if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+        if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
             return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
         }
         char *prom = get_prometheus_metrics(get_uptime_seconds());
@@ -1415,7 +1425,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         if (!is_valid_slug(profile, 24U)) {
             return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid profile handle");
         }
-        if (check_rate_limit(client_ip, STATS_RATE_LIMIT) != 0) {
+        if (scoped_rate_limit("read", client_ip, STATS_RATE_LIMIT) != 0) {
             return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
         }
         char *json = get_bio_collection_json(profile);
@@ -1435,10 +1445,31 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
 
     if (strncmp(url, "/api/stats/", 11) == 0) {
         const char *slug = url + 11;
+        size_t s_len = strlen(slug);
+        if (s_len > 11U && strcmp(slug + s_len - 11U, "/export.csv") == 0) {
+            char clean_slug[MAX_SLUG_LEN];
+            size_t base_len = s_len - 11U;
+            if (base_len >= sizeof(clean_slug)) {
+                return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid slug");
+            }
+            memcpy(clean_slug, slug, base_len);
+            clean_slug[base_len] = '\0';
+            if (!is_valid_slug(clean_slug, MAX_SLUG_LENGTH)) {
+                return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid slug");
+            }
+            if (scoped_rate_limit("read", client_ip, STATS_RATE_LIMIT) != 0) {
+                return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+            }
+            char *csv = export_slug_analytics_csv(clean_slug);
+            if (!csv) return send_error(connection, MHD_HTTP_NOT_FOUND, "Link not found");
+            char disp[96];
+            snprintf(disp, sizeof(disp), "attachment; filename=\"analytics-%s.csv\"", clean_slug);
+            return send_dynamic_buffer(connection, MHD_HTTP_OK, csv, "text/csv; charset=utf-8", disp);
+        }
         if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
             return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid slug");
         }
-        if (check_rate_limit(client_ip, STATS_RATE_LIMIT) != 0) {
+        if (scoped_rate_limit("read", client_ip, STATS_RATE_LIMIT) != 0) {
             return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
         }
         char *json = get_detailed_stats_json(slug);
@@ -1453,7 +1484,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
             return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid slug");
         }
-        if (check_rate_limit(client_ip, STATS_RATE_LIMIT) != 0) {
+        if (scoped_rate_limit("read", client_ip, STATS_RATE_LIMIT) != 0) {
             return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
         }
         char *json = get_link_inspect_json(slug);
@@ -1480,7 +1511,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
             return send_error_page(connection, MHD_HTTP_BAD_REQUEST, "Bad Request", "The link identifier is invalid.");
         }
-        if (check_rate_limit(client_ip, STATS_RATE_LIMIT) != 0) {
+        if (scoped_rate_limit("read", client_ip, STATS_RATE_LIMIT) != 0) {
             return send_error_page(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Too Many Requests", "Please wait a moment and try again.");
         }
 
@@ -1556,6 +1587,11 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         return send_error_page(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Unavailable", "This link cannot be redirected safely.");
     }
 
+    // Interstitial safety preview: show destination first, count the visit only on confirmed continue
+    const char *direct_param = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "direct");
+    if ((!direct_param || strcmp(direct_param, "1") != 0) && is_interstitial_link(slug)) {
+        return handle_inspect_page(connection, slug, client_ip);
+    }
     record_request_visit(connection, slug, client_ip);
     log_message("Redirected short link: %s", slug);
 
@@ -1576,7 +1612,7 @@ static int handle_delete(struct MHD_Connection *connection, const char *url,
         (void)record_audit_event("auth.failed", "anonymous", url, client_ip, "Unauthorized DELETE");
         return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
     }
-    if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+    if (scoped_rate_limit("admin", client_ip, ADMIN_RATE_LIMIT) != 0) {
         return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
     }
 

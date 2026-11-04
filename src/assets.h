@@ -681,6 +681,7 @@
 "      const geoCountry = byId('geoCountry') ? byId('geoCountry').value.trim().toUpperCase() : '';\n" \
 "      const geoUrl = byId('geoUrl') ? byId('geoUrl').value.trim() : '';\n" \
 "      const redirectCode = byId('redirectCode') ? Number(byId('redirectCode').value || 302) : 302;\n" \
+"      const interstitial = byId('interstitial') ? byId('interstitial').value === '1' : false;\n" \
 "      const utmSource = byId('utmSource') ? byId('utmSource').value.trim() : '';\n" \
 "      const utmMedium = byId('utmMedium') ? byId('utmMedium').value.trim() : '';\n" \
 "      const utmCampaign = byId('utmCampaign') ? byId('utmCampaign').value.trim() : '';\n" \
@@ -709,6 +710,7 @@
 "      if (altUrl && altWeight > 0) { payload.alt_url = altUrl; payload.alt_weight = altWeight; }\n" \
 "      if (geoCountry && geoUrl) { payload.geo_country = geoCountry; payload.geo_url = geoUrl; }\n" \
 "      if (redirectCode !== 302) payload.redirect_code = redirectCode;\n" \
+"      if (interstitial) payload.interstitial = true;\n" \
 "      if (utmSource) payload.utm_source = utmSource;\n" \
 "      if (utmMedium) payload.utm_medium = utmMedium;\n" \
 "      if (utmCampaign) payload.utm_campaign = utmCampaign;\n" \
@@ -1046,7 +1048,14 @@
 "          const md = '[![Visits](' + window.location.origin + '/badge/' + slug + '.svg)](' + window.location.origin + '/' + slug + ')';\n" \
 "          try { await navigator.clipboard.writeText(md); copyMd.textContent = 'Copied Markdown!'; } catch (e) {}\n" \
 "        });\n" \
-"        row.append(img, copyMd);\n" \
+"        const csvLink = document.createElement('a');\n" \
+"        csvLink.className = 'btn btn-sm';\n" \
+"        csvLink.href = '/api/stats/' + encodeURIComponent(slug) + '/export.csv';\n" \
+"        csvLink.textContent = 'Export Analytics CSV';\n" \
+"        const actWrap = document.createElement('div');\n" \
+"        actWrap.className = 'actions';\n" \
+"        actWrap.append(copyMd, csvLink);\n" \
+"        row.append(img, actWrap);\n" \
 "        badgeBox.append(h2, row);\n" \
 "      }\n" \
 "    } catch (e) {}\n" \

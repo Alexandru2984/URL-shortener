@@ -111,6 +111,13 @@
 "              <div class=\"field\"><label for=\"maxClicks\">Max clicks</label><input id=\"maxClicks\" type=\"number\" inputmode=\"numeric\" min=\"1\" max=\"1000000\" placeholder=\"Unlimited\"></div>\n" \
 "              <div class=\"field\"><label for=\"activatesIn\">Delay (hours)</label><input id=\"activatesIn\" type=\"number\" inputmode=\"numeric\" min=\"1\" max=\"8760\" placeholder=\"Immediate\"></div>\n" \
 "            </div>\n" \
+"            <div class=\"field\">\n" \
+"              <label for=\"interstitial\">Redirect Mode</label>\n" \
+"              <select id=\"interstitial\">\n" \
+"                <option value=\"0\">Instant HTTP Redirect (Default)</option>\n" \
+"                <option value=\"1\">Safety Preview Interstitial Page (Show destination before redirect)</option>\n" \
+"              </select>\n" \
+"            </div>\n" \
 "          </div>\n" \
 "          <button class=\"primary\" id=\"submitButton\" type=\"submit\">Shorten link</button>\n" \
 "        </form>\n" \

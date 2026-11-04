@@ -316,6 +316,7 @@ int init_db(const char *db_path, const char *analytics_key) {
         ensure_table_column("links", "redirect_code", "INTEGER DEFAULT 302") != 0 ||
         ensure_table_column("links", "geo_country", "TEXT") != 0 ||
         ensure_table_column("links", "geo_url", "TEXT") != 0 ||
+        ensure_table_column("links", "interstitial", "INTEGER DEFAULT 0") != 0 ||
         ensure_table_column("links", "clicks_count", "INTEGER DEFAULT 0") != 0 ||
         exec_sql("create visits table", visits_sql) != 0 ||
         ensure_table_column("visits", "device_type", "TEXT DEFAULT 'unknown'") != 0 ||
@@ -360,15 +361,16 @@ int insert_link_ex(const char *slug, const char *url, const struct link_options 
         sanitize_country_code(opts->geo_country, clean_geo, sizeof(clean_geo));
         if (strcmp(clean_geo, "XX") == 0) clean_geo[0] = '\0';
     }
+    int interstitial = (opts && opts->interstitial) ? 1 : 0;
 
     if (ttl_hours < 0 || max_clicks < 0 || activates_in_hours < 0) return -1;
 
     static const char sql[] =
-        "INSERT INTO links (slug, url, expires_at, activates_at, password, max_clicks, title, tags, mobile_url, idempotency_key, alt_url, alt_weight, redirect_code, geo_country, geo_url, is_active, clicks_count) "
+        "INSERT INTO links (slug, url, expires_at, activates_at, password, max_clicks, title, tags, mobile_url, idempotency_key, alt_url, alt_weight, redirect_code, geo_country, geo_url, interstitial, is_active, clicks_count) "
         "VALUES (?, ?, "
         "CASE WHEN ? > 0 THEN datetime('now', '+' || ? || ' hours') ELSE NULL END, "
         "CASE WHEN ? > 0 THEN datetime('now', '+' || ? || ' hours') ELSE NULL END, "
-        "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0);";
+        "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0);";
 
     sqlite3_stmt *statement = NULL;
     if (sqlite3_prepare_v2(db, sql, -1, &statement, NULL) != SQLITE_OK) return -1;
@@ -411,6 +413,7 @@ int insert_link_ex(const char *slug, const char *url, const struct link_options 
         sqlite3_bind_null(statement, 16);
         sqlite3_bind_null(statement, 17);
     }
+    sqlite3_bind_int(statement, 18, interstitial);
 
     int rc = sqlite3_step(statement);
     OPENSSL_cleanse(password_hash, sizeof(password_hash));
@@ -971,6 +974,88 @@ char *get_detailed_stats_json(const char *slug) {
     return json;
 }
 
+int is_interstitial_link(const char *slug) {
+    if (!slug || !slug[0]) return 0;
+    static const char sql[] = "SELECT COALESCE(interstitial, 0) FROM links WHERE slug = ?;";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return 0;
+    sqlite3_bind_text(stmt, 1, slug, -1, SQLITE_TRANSIENT);
+    int flag = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        flag = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return flag ? 1 : 0;
+}
+
+char *export_slug_analytics_csv(const char *slug) {
+    if (!slug || !slug[0]) return NULL;
+
+    static const char check_sql[] = "SELECT 1 FROM links WHERE slug = ?;";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, check_sql, -1, &stmt, NULL) != SQLITE_OK) return NULL;
+    sqlite3_bind_text(stmt, 1, slug, -1, SQLITE_TRANSIENT);
+    int exists = (sqlite3_step(stmt) == SQLITE_ROW);
+    sqlite3_finalize(stmt);
+    if (!exists) return NULL;
+
+    size_t cap = 4096U;
+    char *csv = malloc(cap);
+    if (!csv) return NULL;
+    int hdr = snprintf(csv, cap, "category,dimension,visits,unique_visitors\r\n");
+    size_t len = (hdr > 0) ? (size_t)hdr : 0;
+
+    static const char daily_sql[] =
+        "SELECT date(timestamp), COUNT(*), COUNT(DISTINCT ip) FROM visits "
+        "WHERE slug = ? GROUP BY date(timestamp) ORDER BY date(timestamp) DESC LIMIT 90;";
+    if (sqlite3_prepare_v2(db, daily_sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, slug, -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char *day = (const char *)sqlite3_column_text(stmt, 0);
+            int v = sqlite3_column_int(stmt, 1);
+            int u = sqlite3_column_int(stmt, 2);
+            if (!day || len + 128U >= cap) break;
+            int n = snprintf(csv + len, cap - len, "daily,%s,%d,%d\r\n", day, v, u);
+            if (n > 0) len += (size_t)n;
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    static const char country_sql[] =
+        "SELECT COALESCE(country_code, 'XX'), COUNT(*), COUNT(DISTINCT ip) FROM visits "
+        "WHERE slug = ? GROUP BY country_code ORDER BY COUNT(*) DESC LIMIT 50;";
+    if (sqlite3_prepare_v2(db, country_sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, slug, -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char *cc = (const char *)sqlite3_column_text(stmt, 0);
+            int v = sqlite3_column_int(stmt, 1);
+            int u = sqlite3_column_int(stmt, 2);
+            if (!cc || len + 128U >= cap) break;
+            int n = snprintf(csv + len, cap - len, "country,%s,%d,%d\r\n", cc, v, u);
+            if (n > 0) len += (size_t)n;
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    static const char dev_sql[] =
+        "SELECT COALESCE(device_type, 'unknown'), COUNT(*), COUNT(DISTINCT ip) FROM visits "
+        "WHERE slug = ? GROUP BY device_type ORDER BY COUNT(*) DESC;";
+    if (sqlite3_prepare_v2(db, dev_sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, slug, -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char *dv = (const char *)sqlite3_column_text(stmt, 0);
+            int v = sqlite3_column_int(stmt, 1);
+            int u = sqlite3_column_int(stmt, 2);
+            if (!dv || len + 128U >= cap) break;
+            int n = snprintf(csv + len, cap - len, "device,%s,%d,%d\r\n", dv, v, u);
+            if (n > 0) len += (size_t)n;
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    return csv;
+}
+
 char *get_link_inspect_json(const char *slug) {
     if (!slug || !slug[0]) return NULL;
 
@@ -981,7 +1066,7 @@ char *get_link_inspect_json(const char *slug) {
         "expires_at IS NOT NULL AND datetime('now') > expires_at, "
         "activates_at IS NOT NULL AND datetime('now') < activates_at, "
         "mobile_url, alt_url, COALESCE(alt_weight, 0), "
-        "geo_country, geo_url, COALESCE(redirect_code, 302) "
+        "geo_country, geo_url, COALESCE(redirect_code, 302), COALESCE(interstitial, 0) "
         "FROM links WHERE slug = ?;";
 
     sqlite3_stmt *stmt = NULL;
@@ -1011,6 +1096,7 @@ char *get_link_inspect_json(const char *slug) {
     const char *geo_country = (const char *)sqlite3_column_text(stmt, 16);
     const char *geo_url = (const char *)sqlite3_column_text(stmt, 17);
     int redirect_code = sqlite3_column_int(stmt, 18);
+    int interstitial = sqlite3_column_int(stmt, 19);
 
     const char *status = "active";
     if (!is_active) status = "disabled";
@@ -1041,6 +1127,7 @@ char *get_link_inspect_json(const char *slug) {
     cJSON_AddBoolToObject(root, "has_geo_route", geo_country != NULL && geo_country[0] != '\0' && geo_url != NULL && geo_url[0] != '\0');
     if (geo_country && geo_country[0]) cJSON_AddStringToObject(root, "geo_country", geo_country);
     else cJSON_AddNullToObject(root, "geo_country");
+    cJSON_AddBoolToObject(root, "interstitial", interstitial != 0);
     cJSON_AddNumberToObject(root, "alt_weight", alt_weight);
     cJSON_AddNumberToObject(root, "redirect_code", redirect_code);
     cJSON_AddNumberToObject(root, "max_clicks", max_clicks);

@@ -113,13 +113,13 @@ int main(void) {
     CHECK(total == 2 && unique == 1);
 
     // Test 1-click self-destruct link (max_clicks = 1) and scheduled link
-    struct link_options burn_opts = { 0, 1, 0, NULL, "One-time secret", "burn,security", NULL, NULL, NULL, 0, 302, NULL, NULL };
+    struct link_options burn_opts = { 0, 1, 0, NULL, "One-time secret", "burn,security", NULL, NULL, NULL, 0, 302, NULL, NULL, 0 };
     CHECK(insert_link_ex("burn-once", "https://example.test/secret-doc", &burn_opts) == 0);
     CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == 0);
     CHECK(record_visit_geo("burn-once", "203.0.113.5", "desktop", "direct", "RO") == 0);
     CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == -3);
 
-    struct link_options sched_opts = { 0, 0, 24, NULL, "Future launch", "launch", NULL, NULL, NULL, 0, 302, NULL, NULL };
+    struct link_options sched_opts = { 0, 0, 24, NULL, "Future launch", "launch", NULL, NULL, NULL, 0, 302, NULL, NULL, 0 };
     CHECK(insert_link_ex("future-link", "https://example.test/launch", &sched_opts) == 0);
     CHECK(get_link("future-link", target, sizeof(target), &requires_password) == -5);
 
@@ -128,7 +128,7 @@ int main(void) {
         0, 0, 0, NULL, "Smart App Link", "launch,mobile",
         "https://m.example.test/app", "idem-key-2026-001",
         "https://example.test/variant-b", 50, 308,
-        "RO", "https://ro.example.test/oferta"
+        "RO", "https://ro.example.test/oferta", 1
     };
     CHECK(insert_link_ex("smart-app", "https://example.test/desktop", &smart_opts) == 0);
     char idem_slug[64];
@@ -145,6 +145,20 @@ int main(void) {
           strcmp(target, "https://example.test/variant-b") == 0);
     CHECK(get_link_for_device("smart-app", "mobile", target, sizeof(target), &requires_password) == 0);
     CHECK(strcmp(target, "https://m.example.test/app") == 0);
+
+    // Interstitial safety preview flag & per-link analytics CSV export
+    CHECK(is_interstitial_link("smart-app") == 1);
+    CHECK(is_interstitial_link("burn-once") == 0);
+    CHECK(is_interstitial_link("does-not-exist") == 0);
+    char *slug_csv = export_slug_analytics_csv("burn-once");
+    CHECK(slug_csv != NULL);
+    if (slug_csv) {
+        CHECK(strstr(slug_csv, "category,dimension,visits,unique_visitors") != NULL);
+        CHECK(strstr(slug_csv, "country,RO,1,1") != NULL);
+        CHECK(strstr(slug_csv, "device,desktop,1,1") != NULL);
+        free(slug_csv);
+    }
+    CHECK(export_slug_analytics_csv("does-not-exist") == NULL);
 
     char *maint_json = run_db_maintenance_json();
     CHECK(maint_json != NULL);
