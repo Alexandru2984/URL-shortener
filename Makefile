@@ -34,8 +34,8 @@ $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 $(BIN_DIR) $(BUILD_DIR):
 	mkdir -p $@
 
-$(TEST_UTILS): $(TEST_DIR)/test_utils.c $(SRC_DIR)/utils.c $(SRC_DIR)/utils.h | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $(TEST_DIR)/test_utils.c $(SRC_DIR)/utils.c $(LDLIBS)
+$(TEST_UTILS): $(TEST_DIR)/test_utils.c $(SRC_DIR)/utils.c $(SRC_DIR)/utils.h $(SRC_DIR)/qr.c $(SRC_DIR)/qr.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $(TEST_DIR)/test_utils.c $(SRC_DIR)/utils.c $(SRC_DIR)/qr.c $(LDLIBS)
 
 $(TEST_DB): $(TEST_DIR)/test_db.c $(SRC_DIR)/db.c $(SRC_DIR)/db.h $(SRC_DIR)/utils.c $(SRC_DIR)/utils.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $(TEST_DIR)/test_db.c $(SRC_DIR)/db.c $(SRC_DIR)/utils.c $(LDLIBS)

@@ -1,5 +1,7 @@
 #include "utils.h"
+#include "qr.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int failures = 0;
@@ -93,6 +95,22 @@ int main(void) {
     char html_out[128];
     html_escape("<script>alert(\"xss\")</script>", html_out, sizeof(html_out));
     CHECK(strcmp(html_out, "&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;") == 0);
+
+    // Pure-C SVG QR Code generator (Versions 1..6)
+    char *svg_v2 = qr_generate_svg("https://c.micutu.com/abc12345", 4);
+    CHECK(svg_v2 != NULL);
+    if (svg_v2) {
+        CHECK(strstr(svg_v2, "<svg xmlns=\"http://www.w3.org/2000/svg\"") != NULL);
+        CHECK(strstr(svg_v2, "<path fill=\"#0f172a\" d=\"M") != NULL);
+        free(svg_v2);
+    }
+
+    char *svg_v6 = qr_generate_svg(
+        "https://c.micutu.com/very-long-custom-slug-testing-qr-version-6-interleaved-reed-solomon-blocks-1234567890", 2);
+    CHECK(svg_v6 != NULL);
+    free(svg_v6);
+
+    CHECK(qr_generate_svg("", 4) == NULL);
 
     char password_hash[128];
     CHECK(hash_password("correct horse battery staple", password_hash, sizeof(password_hash)) == 0);
