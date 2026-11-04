@@ -19,6 +19,8 @@ struct link_options {
     const char *alt_url;
     int alt_weight;
     int redirect_code;
+    const char *geo_country;
+    const char *geo_url;
 };
 
 int init_db(const char *db_path, const char *analytics_hmac_key);
@@ -35,6 +37,9 @@ int get_link_for_device(const char *slug, const char *device_type,
 int get_link_for_device_ex(const char *slug, const char *device_type,
                            char *url_out, size_t url_out_len, int *requires_pwd,
                            int *redirect_code_out);
+int get_link_for_visitor(const char *slug, const char *device_type,
+                         const char *country_code, char *url_out, size_t url_out_len,
+                         int *requires_pwd, int *redirect_code_out);
 int get_link_with_password(const char *slug, const char *password, char *url_out, size_t url_out_len);
 
 int record_visit(const char *slug, const char *ip);
@@ -58,6 +63,7 @@ int delete_link(const char *slug);
 int bulk_admin_action(const char *action, const char *const *slugs, int slug_count);
 int cleanup_expired_links(void);
 int cleanup_old_analytics(int retention_days);
+char *run_db_maintenance_json(void);
 
 // Scoped creator tokens
 int create_api_token(const char *name, int ttl_days,

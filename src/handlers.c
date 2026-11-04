@@ -237,9 +237,9 @@ static int check_create_permission(struct MHD_Connection *connection,
 
 static int is_reserved_slug(const char *slug) {
     static const char *const reserved[] = {
-        "admin", "api", "assets", "bio", "favicon.ico", "favicon.svg", "health",
-        "inspect", "manifest.json", "metrics", "p", "qr", "robots.txt", "shorten",
-        "sitemap.xml", "stats", "unlock"
+        "admin", "api", "assets", "badge", "bio", "docs", "favicon.ico", "favicon.svg",
+        "health", "inspect", "manifest.json", "metrics", "openapi.json", "p", "qr",
+        "robots.txt", "shorten", "sitemap.xml", "stats", "unlock"
     };
 
     for (size_t i = 0; i < sizeof(reserved) / sizeof(reserved[0]); i++) {
@@ -486,6 +486,21 @@ static int handle_shorten(struct MHD_Connection *connection, const char *client_
         (opts.redirect_code != 301 && opts.redirect_code != 302 &&
          opts.redirect_code != 307 && opts.redirect_code != 308)) {
         return send_error(connection, MHD_HTTP_BAD_REQUEST, "redirect_code must be 301, 302, 307, or 308");
+    }
+    if (get_optional_string(json, "geo_country", 4U, &opts.geo_country) != 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "geo_country must be a 2-letter ISO country code");
+    }
+    char clean_geo[4] = {0};
+    if (opts.geo_country && opts.geo_country[0]) {
+        sanitize_country_code(opts.geo_country, clean_geo, sizeof(clean_geo));
+        if (strcmp(clean_geo, "XX") == 0) {
+            return send_error(connection, MHD_HTTP_BAD_REQUEST, "geo_country must be a valid 2-letter ISO country code");
+        }
+        opts.geo_country = clean_geo;
+    }
+    if (get_optional_string(json, "geo_url", MAX_URL_LEN, &opts.geo_url) != 0 ||
+        (opts.geo_url && !is_safe_redirect_url(opts.geo_url, g_base_url, MAX_URL_LEN))) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "geo_url must be a valid public HTTP or HTTPS URL");
     }
 
     char slug[MAX_SLUG_LEN];
@@ -844,6 +859,24 @@ static int handle_admin_restore(struct MHD_Connection *connection, const char *c
     return send_json_response(connection, MHD_HTTP_OK, out);
 }
 
+static int handle_admin_maintenance(struct MHD_Connection *connection, const char *client_ip) {
+    if (!check_admin_api_key(connection)) {
+        return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
+    }
+    if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+        return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+    }
+
+    char *report = run_db_maintenance_json();
+    if (!report) {
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Database maintenance failed");
+    }
+    (void)record_audit_event("admin.maintenance", "admin", NULL, client_ip, "Optimized SQLite & WAL checkpoint");
+    int ret = send_json_response(connection, MHD_HTTP_OK, report);
+    free(report);
+    return ret;
+}
+
 static int handle_inspect_page(struct MHD_Connection *connection, const char *slug,
                                const char *client_ip) {
     if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
@@ -1075,6 +1108,96 @@ static int handle_qr_request(struct MHD_Connection *connection, const char *raw_
     return send_dynamic_buffer(connection, MHD_HTTP_OK, svg, "image/svg+xml; charset=utf-8", NULL);
 }
 
+static int handle_badge_request(struct MHD_Connection *connection, const char *raw_slug,
+                                const char *client_ip) {
+    char slug[MAX_SLUG_LEN];
+    size_t raw_len = strnlen(raw_slug, MAX_SLUG_LEN + 8U);
+    if (raw_len == 0 || raw_len >= MAX_SLUG_LEN + 5U) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid slug");
+    }
+    if (raw_len > 4U && strcmp(raw_slug + raw_len - 4U, ".svg") == 0) {
+        raw_len -= 4U;
+    }
+    if (raw_len >= sizeof(slug)) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid slug");
+    }
+    memcpy(slug, raw_slug, raw_len);
+    slug[raw_len] = '\0';
+
+    if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid slug");
+    }
+    if (check_rate_limit(client_ip, STATS_RATE_LIMIT) != 0) {
+        return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+    }
+
+    char ignored_url[MAX_URL_BUFFER];
+    int requires_pwd = 0;
+    int db_res = get_link(slug, ignored_url, sizeof(ignored_url), &requires_pwd);
+    if (db_res == -1) {
+        return send_error(connection, MHD_HTTP_NOT_FOUND, "Link not found");
+    }
+
+    int total = 0;
+    int unique = 0;
+    (void)get_stats(slug, &total, &unique);
+
+    const char *label_param = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "label");
+    const char *color_param = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "color");
+    const char *metric_param = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "metric");
+
+    char esc_label[48];
+    html_escape((label_param && label_param[0]) ? label_param : slug, esc_label, sizeof(esc_label));
+
+    const char *accent = "#0284c7";
+    if (color_param) {
+        if (strcmp(color_param, "emerald") == 0) accent = "#059669";
+        else if (strcmp(color_param, "amber") == 0) accent = "#d97706";
+        else if (strcmp(color_param, "rose") == 0) accent = "#e11d48";
+        else if (strcmp(color_param, "violet") == 0) accent = "#7c3aed";
+    }
+
+    char value_buf[48];
+    if (metric_param && strcmp(metric_param, "unique") == 0) {
+        snprintf(value_buf, sizeof(value_buf), "%d unique", unique);
+    } else if (metric_param && strcmp(metric_param, "status") == 0) {
+        snprintf(value_buf, sizeof(value_buf), "%s", (db_res == 0) ? "active" : "inactive");
+    } else {
+        snprintf(value_buf, sizeof(value_buf), "%d visits", total);
+    }
+
+    int left_w = (int)(strlen(esc_label) * 7U + 18U);
+    if (left_w < 54) left_w = 54;
+    if (left_w > 180) left_w = 180;
+    int right_w = (int)(strlen(value_buf) * 7U + 18U);
+    if (right_w < 64) right_w = 64;
+    int total_w = left_w + right_w;
+
+    char *svg = malloc(1536U);
+    if (!svg) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Memory error");
+    snprintf(svg, 1536U,
+             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"20\" role=\"img\" aria-label=\"%s: %s\">"
+             "<linearGradient id=\"s\" x2=\"0\" y2=\"100%%\">"
+             "<stop offset=\"0\" stop-color=\"#fff\" stop-opacity=\".12\"/>"
+             "<stop offset=\"1\" stop-opacity=\".12\"/>"
+             "</linearGradient>"
+             "<clipPath id=\"r\"><rect width=\"%d\" height=\"20\" rx=\"4\" fill=\"#fff\"/></clipPath>"
+             "<g clip-path=\"url(#r)\">"
+             "<rect width=\"%d\" height=\"20\" fill=\"#0f172a\"/>"
+             "<rect x=\"%d\" width=\"%d\" height=\"20\" fill=\"%s\"/>"
+             "<rect width=\"%d\" height=\"20\" fill=\"url(#s)\"/>"
+             "</g>"
+             "<g fill=\"#fff\" text-anchor=\"middle\" font-family=\"ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace\" text-rendering=\"geometricPrecision\" font-size=\"11\">"
+             "<text x=\"%d\" y=\"14\">%s</text>"
+             "<text x=\"%d\" y=\"14\" font-weight=\"bold\">%s</text>"
+             "</g>"
+             "</svg>",
+             total_w, esc_label, value_buf,
+             total_w, left_w, left_w, right_w, accent, total_w,
+             left_w / 2, esc_label, left_w + (right_w / 2), value_buf);
+    return send_dynamic_buffer(connection, MHD_HTTP_OK, svg, "image/svg+xml; charset=utf-8", NULL);
+}
+
 static int handle_get(struct MHD_Connection *connection, const char *url, const char *client_ip) {
     if (strcmp(url, "/health") == 0) {
         return send_json_response(connection, MHD_HTTP_OK, "{\"status\":\"ok\"}");
@@ -1096,6 +1219,9 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
     if (strcmp(url, "/assets/stats.js") == 0) {
         return send_text_response(connection, MHD_HTTP_OK, STATS_JS, "application/javascript; charset=utf-8");
     }
+    if (strcmp(url, "/assets/docs.js") == 0) {
+        return send_text_response(connection, MHD_HTTP_OK, DOCS_JS, "application/javascript; charset=utf-8");
+    }
     if (strcmp(url, "/favicon.svg") == 0) {
         return send_text_response(connection, MHD_HTTP_OK, FAVICON_SVG, "image/svg+xml; charset=utf-8");
     }
@@ -1105,30 +1231,35 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
     if (strcmp(url, "/manifest.json") == 0) {
         return send_text_response(connection, MHD_HTTP_OK, MANIFEST_JSON, "application/manifest+json; charset=utf-8");
     }
+    if (strcmp(url, "/docs") == 0) {
+        return send_html(connection, MHD_HTTP_OK, DOCS_HTML);
+    }
 
     if (strcmp(url, "/openapi.json") == 0) {
-        char *spec = malloc(2048U);
+        char *spec = malloc(2560U);
         if (!spec) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Memory error");
-        snprintf(spec, 2048U,
+        snprintf(spec, 2560U,
                  "{\n"
                  "  \"openapi\": \"3.0.3\",\n"
                  "  \"info\": {\n"
                  "    \"title\": \"c.micutu.com C17 URL Shortener API\",\n"
-                 "    \"version\": \"2.0.0\",\n"
-                 "    \"description\": \"High-performance URL shortener, native SVG QR generator, A/B router, and privacy-first analytics engine in pure C17.\"\n"
+                 "    \"version\": \"2.1.0\",\n"
+                 "    \"description\": \"High-performance URL shortener, native SVG QR & badge generator, Geo/A-B router, and privacy-first analytics engine in pure C17.\"\n"
                  "  },\n"
                  "  \"servers\": [{ \"url\": \"%s\" }],\n"
                  "  \"paths\": {\n"
-                 "    \"/shorten\": { \"post\": { \"summary\": \"Create a short link\" } },\n"
+                 "    \"/shorten\": { \"post\": { \"summary\": \"Create a short link (supports UTM, A/B, Mobile & Geo routing)\" } },\n"
                  "    \"/api/bulk/shorten\": { \"post\": { \"summary\": \"Batch shorten up to 25 links\" } },\n"
-                 "    \"/qr/{slug}.svg\": { \"get\": { \"summary\": \"Generate themed SVG QR code in pure C\" } },\n"
-                 "    \"/api/inspect/{slug}\": { \"get\": { \"summary\": \"Inspect link safety and metadata\" } },\n"
-                 "    \"/api/stats/{slug}\": { \"get\": { \"summary\": \"Query privacy-preserving link analytics\" } },\n"
+                 "    \"/qr/{slug}.svg\": { \"get\": { \"summary\": \"Generate themed ISO 18004 SVG QR code in pure C\" } },\n"
+                 "    \"/badge/{slug}.svg\": { \"get\": { \"summary\": \"Generate dynamic shields-style SVG analytics badge\" } },\n"
+                 "    \"/api/inspect/{slug}\": { \"get\": { \"summary\": \"Inspect link safety, routing policies, and metadata\" } },\n"
+                 "    \"/api/stats/{slug}\": { \"get\": { \"summary\": \"Query privacy-preserving link analytics, 24h heatmap, and countries\" } },\n"
                  "    \"/api/bio/{tag}\": { \"get\": { \"summary\": \"Query Link-in-Bio public collection\" } },\n"
                  "    \"/api/admin/links\": { \"get\": { \"summary\": \"Query and filter links\" } },\n"
-                 "    \"/api/admin/bulk-action\": { \"post\": { \"summary\": \"Batch enable, disable, or delete links\" } },\n"
+                 "    \"/api/admin/bulk-action\": { \"post\": { \"summary\": \"Batch enable, disable, reset clicks, or delete links\" } },\n"
                  "    \"/api/admin/backup.json\": { \"get\": { \"summary\": \"Export JSON snapshot backup\" } },\n"
                  "    \"/api/admin/restore\": { \"post\": { \"summary\": \"Restore links from JSON snapshot\" } },\n"
+                 "    \"/api/admin/maintenance\": { \"post\": { \"summary\": \"Optimize SQLite indexes, purge expired records, and truncate WAL\" } },\n"
                  "    \"/metrics\": { \"get\": { \"summary\": \"Prometheus metrics exporter\" } },\n"
                  "    \"/health\": { \"get\": { \"summary\": \"Service health check\" } }\n"
                  "  }\n"
@@ -1336,6 +1467,10 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         return handle_qr_request(connection, url + 4, client_ip);
     }
 
+    if (strncmp(url, "/badge/", 7) == 0) {
+        return handle_badge_request(connection, url + 7, client_ip);
+    }
+
     if (strncmp(url, "/inspect/", 9) == 0) {
         return handle_inspect_page(connection, url + 9, client_ip);
     }
@@ -1390,10 +1525,15 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
     int requires_password = 0;
     int redirect_code = MHD_HTTP_FOUND;
     const char *ua_header = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "User-Agent");
+    const char *cf_country = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "CF-IPCountry");
+    if (!cf_country || !cf_country[0]) {
+        cf_country = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "X-Country-Code");
+    }
     char visitor_device[16];
     classify_user_agent(ua_header, visitor_device, sizeof(visitor_device));
-    int db_result = get_link_for_device_ex(slug, visitor_device, target_url, sizeof(target_url),
-                                           &requires_password, &redirect_code);
+    int db_result = get_link_for_visitor(slug, visitor_device, cf_country,
+                                         target_url, sizeof(target_url),
+                                         &requires_password, &redirect_code);
     if (db_result == -2 || db_result == -3) {
         return send_error_page(connection, MHD_HTTP_GONE, "Link Expired",
                                "This short link has expired or reached its maximum click limit.");
@@ -1528,6 +1668,8 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
             ret = handle_admin_bulk_action(connection, client_ip, json);
         } else if (strcasecmp(method, "POST") == 0 && strcmp(url, "/api/admin/restore") == 0) {
             ret = handle_admin_restore(connection, client_ip, json);
+        } else if (strcasecmp(method, "POST") == 0 && strcmp(url, "/api/admin/maintenance") == 0) {
+            ret = handle_admin_maintenance(connection, client_ip);
         } else if (strncmp(url, "/api/admin/links/", 17) == 0) {
             ret = handle_admin_update_link(connection, client_ip, url + 17, json);
         } else {

@@ -38,6 +38,7 @@
 "    <a class=\"brand\" href=\"/\"><img src=\"/favicon.svg\" alt=\"Logo\"><span>c.micutu.com</span><span class=\"brand-badge\">C17 ENGINE</span></a>\n" \
 "    <nav class=\"nav-links\" aria-label=\"Primary\">\n" \
 "      <button type=\"button\" class=\"btn btn-sm\" id=\"themeToggle\">Light mode</button>\n" \
+"      <a class=\"btn btn-sm\" href=\"/docs\">API Playground</a>\n" \
 "      <a class=\"btn btn-sm\" href=\"/admin\">Admin Dashboard</a>\n" \
 "    </nav>\n" \
 "  </header>\n" \
@@ -95,6 +96,10 @@
 "            <div class=\"row\">\n" \
 "              <div class=\"field\"><label for=\"altUrl\">A/B Split Variant B URL (optional)</label><input id=\"altUrl\" type=\"url\" autocomplete=\"off\" placeholder=\"https://example.com/landing-v2\"></div>\n" \
 "              <div class=\"field\"><label for=\"altWeight\">Variant B Traffic % (1-99)</label><input id=\"altWeight\" type=\"number\" min=\"1\" max=\"99\" placeholder=\"50\"></div>\n" \
+"            </div>\n" \
+"            <div class=\"row\">\n" \
+"              <div class=\"field\"><label for=\"geoCountry\">Geo-Target Country ISO (e.g. RO, DE, US)</label><input id=\"geoCountry\" type=\"text\" maxlength=\"2\" autocomplete=\"off\" placeholder=\"RO\"></div>\n" \
+"              <div class=\"field\"><label for=\"geoUrl\">Geo-Target Destination URL (optional)</label><input id=\"geoUrl\" type=\"url\" autocomplete=\"off\" placeholder=\"https://ro.example.com/oferta\"></div>\n" \
 "            </div>\n" \
 "            <div class=\"row-3\">\n" \
 "              <div class=\"field\"><label for=\"utmSource\">UTM Source</label><input id=\"utmSource\" type=\"text\" autocomplete=\"off\" placeholder=\"newsletter\"></div>\n" \

@@ -678,6 +678,8 @@
 "      const mobileUrl = byId('mobileUrl') ? byId('mobileUrl').value.trim() : '';\n" \
 "      const altUrl = byId('altUrl') ? byId('altUrl').value.trim() : '';\n" \
 "      const altWeight = byId('altWeight') ? Number(byId('altWeight').value || 0) : 0;\n" \
+"      const geoCountry = byId('geoCountry') ? byId('geoCountry').value.trim().toUpperCase() : '';\n" \
+"      const geoUrl = byId('geoUrl') ? byId('geoUrl').value.trim() : '';\n" \
 "      const redirectCode = byId('redirectCode') ? Number(byId('redirectCode').value || 302) : 302;\n" \
 "      const utmSource = byId('utmSource') ? byId('utmSource').value.trim() : '';\n" \
 "      const utmMedium = byId('utmMedium') ? byId('utmMedium').value.trim() : '';\n" \
@@ -705,6 +707,7 @@
 "      if (tags) payload.tags = tags;\n" \
 "      if (mobileUrl) payload.mobile_url = mobileUrl;\n" \
 "      if (altUrl && altWeight > 0) { payload.alt_url = altUrl; payload.alt_weight = altWeight; }\n" \
+"      if (geoCountry && geoUrl) { payload.geo_country = geoCountry; payload.geo_url = geoUrl; }\n" \
 "      if (redirectCode !== 302) payload.redirect_code = redirectCode;\n" \
 "      if (utmSource) payload.utm_source = utmSource;\n" \
 "      if (utmMedium) payload.utm_medium = utmMedium;\n" \
@@ -1024,6 +1027,27 @@
 "            hourBox.append(wrap);\n" \
 "          }\n" \
 "        }\n" \
+"      }\n" \
+"      const badgeBox = byId('badgePreviewBox');\n" \
+"      if (badgeBox) {\n" \
+"        badgeBox.replaceChildren();\n" \
+"        const h2 = document.createElement('h2');\n" \
+"        h2.textContent = 'Embeddable SVG Analytics Badge';\n" \
+"        const row = document.createElement('div');\n" \
+"        row.className = 'list-row';\n" \
+"        const img = document.createElement('img');\n" \
+"        img.src = '/badge/' + encodeURIComponent(slug) + '.svg';\n" \
+"        img.alt = 'Visits badge';\n" \
+"        const copyMd = document.createElement('button');\n" \
+"        copyMd.type = 'button';\n" \
+"        copyMd.className = 'btn btn-sm';\n" \
+"        copyMd.textContent = 'Copy Markdown Badge';\n" \
+"        copyMd.addEventListener('click', async () => {\n" \
+"          const md = '[![Visits](' + window.location.origin + '/badge/' + slug + '.svg)](' + window.location.origin + '/' + slug + ')';\n" \
+"          try { await navigator.clipboard.writeText(md); copyMd.textContent = 'Copied Markdown!'; } catch (e) {}\n" \
+"        });\n" \
+"        row.append(img, copyMd);\n" \
+"        badgeBox.append(h2, row);\n" \
 "      }\n" \
 "    } catch (e) {}\n" \
 "  }\n" \
@@ -1443,6 +1467,24 @@
 "    });\n" \
 "  }\n" \
 "\n" \
+"  if (byId('maintenanceBtn')) {\n" \
+"    byId('maintenanceBtn').addEventListener('click', async () => {\n" \
+"      if (!apiKey) return;\n" \
+"      try {\n" \
+"        const res = await fetch('/api/admin/maintenance', { method: 'POST', headers: headers(true), body: '{}' });\n" \
+"        const data = await res.json();\n" \
+"        if (res.ok && data) {\n" \
+"          setStatus(dashboardStatus, 'SQLite optimized: purged ' + count(data.expired_purged) + ' expired links, ' + count(data.ratelimits_purged) + ' rate-limit windows, WAL checkpointed (' + count(data.db_size_bytes) + ' bytes).');\n" \
+"          loadLinks();\n" \
+"        } else {\n" \
+"          setStatus(dashboardStatus, 'Maintenance failed.');\n" \
+"        }\n" \
+"      } catch (e) {\n" \
+"        setStatus(dashboardStatus, 'Maintenance request failed.');\n" \
+"      }\n" \
+"    });\n" \
+"  }\n" \
+"\n" \
 "  if (byId('editCancel')) {\n" \
 "    byId('editCancel').addEventListener('click', () => { byId('editModal').hidden = true; });\n" \
 "  }\n" \
@@ -1511,6 +1553,150 @@
 "  }\n" \
 "\n" \
 "  emptyRow(rows, 6, 'Unlock the dashboard to load links.');\n" \
+"})();\n"
+
+#define DOCS_HTML \
+"<!doctype html>\n" \
+"<html lang=\"en\">\n" \
+"<head>\n" \
+"  <meta charset=\"utf-8\">\n" \
+"  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n" \
+"  <link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.svg\">\n" \
+"  <link rel=\"stylesheet\" href=\"/assets/styles.css\">\n" \
+"  <title>API Explorer &amp; Playground - c.micutu.com</title>\n" \
+"</head>\n" \
+"<body>\n" \
+"  <header class=\"navbar\">\n" \
+"    <a class=\"brand\" href=\"/\"><img src=\"/favicon.svg\" alt=\"Logo\"><span>c.micutu.com</span><span class=\"brand-badge\">API DOCS</span></a>\n" \
+"    <nav class=\"nav-links\">\n" \
+"      <a class=\"btn btn-sm\" href=\"/openapi.json\" target=\"_blank\">OpenAPI 3.0 JSON</a>\n" \
+"      <a class=\"btn btn-sm\" href=\"/\">&larr; Shortener</a>\n" \
+"    </nav>\n" \
+"  </header>\n" \
+"  <main class=\"narrow\">\n" \
+"    <section class=\"container\">\n" \
+"      <h1>Interactive C17 API Playground</h1>\n" \
+"      <p class=\"subtitle\">Explore endpoints defined in <code>/openapi.json</code> and execute live requests directly against the C17 engine.</p>\n" \
+"      <div class=\"panel\">\n" \
+"        <h2>Live Request Tester</h2>\n" \
+"        <form id=\"playgroundForm\">\n" \
+"          <div class=\"row\">\n" \
+"            <div class=\"field\">\n" \
+"              <label for=\"pgEndpoint\">Endpoint Preset</label>\n" \
+"              <select id=\"pgEndpoint\">\n" \
+"                <option value=\"GET|/health\">GET /health (Service Health)</option>\n" \
+"                <option value=\"GET|/openapi.json\">GET /openapi.json (OpenAPI Spec)</option>\n" \
+"                <option value=\"GET|/api/inspect/demo\">GET /api/inspect/{slug} (Link Safety &amp; Routing)</option>\n" \
+"                <option value=\"GET|/api/stats/demo\">GET /api/stats/{slug} (Analytics &amp; Heatmap)</option>\n" \
+"                <option value=\"GET|/api/bio/launch\">GET /api/bio/{tag} (Link-in-Bio Hub JSON)</option>\n" \
+"                <option value=\"POST|/shorten\">POST /shorten (Create Short Link)</option>\n" \
+"              </select>\n" \
+"            </div>\n" \
+"            <div class=\"field\">\n" \
+"              <label for=\"pgPath\">Request Path</label>\n" \
+"              <input id=\"pgPath\" type=\"text\" value=\"/health\" required>\n" \
+"            </div>\n" \
+"          </div>\n" \
+"          <div class=\"field\" id=\"pgKeyField\" hidden>\n" \
+"            <label for=\"pgKey\">X-API-Key / Scoped Creator Token (<code>csh_...</code>)</label>\n" \
+"            <input id=\"pgKey\" type=\"password\" placeholder=\"Enter Admin API Key or csh_... token\">\n" \
+"          </div>\n" \
+"          <div class=\"field\" id=\"pgBodyField\" hidden>\n" \
+"            <label for=\"pgBody\">JSON Request Body</label>\n" \
+"            <textarea id=\"pgBody\" rows=\"4\">{\"url\":\"https://example.com/docs\",\"geo_country\":\"RO\",\"geo_url\":\"https://example.com/ro\"}</textarea>\n" \
+"          </div>\n" \
+"          <button type=\"submit\" class=\"primary\" id=\"pgSendBtn\">Send Live Request</button>\n" \
+"        </form>\n" \
+"        <div class=\"field\" id=\"pgResultWrap\" hidden>\n" \
+"          <div class=\"list-row\"><span class=\"hint\">HTTP Status</span><strong id=\"pgStatus\">200 OK</strong></div>\n" \
+"          <pre id=\"pgOutput\"></pre>\n" \
+"        </div>\n" \
+"      </div>\n" \
+"      <div class=\"panel\">\n" \
+"        <h2>Registered OpenAPI 3.0 Paths</h2>\n" \
+"        <div id=\"openapiPaths\"><p class=\"hint\">Loading /openapi.json...</p></div>\n" \
+"      </div>\n" \
+"    </section>\n" \
+"  </main>\n" \
+"  <script src=\"/assets/docs.js\" defer></script>\n" \
+"</body>\n" \
+"</html>"
+
+#define DOCS_JS \
+"(() => {\n" \
+"  'use strict';\n" \
+"  const byId = (id) => document.getElementById(id);\n" \
+"  const sel = byId('pgEndpoint'), pathIn = byId('pgPath');\n" \
+"  const keyWrap = byId('pgKeyField'), bodyWrap = byId('pgBodyField');\n" \
+"  if (sel) {\n" \
+"    sel.addEventListener('change', () => {\n" \
+"      const [method, path] = sel.value.split('|');\n" \
+"      pathIn.value = path;\n" \
+"      const isPost = method === 'POST';\n" \
+"      keyWrap.hidden = !isPost;\n" \
+"      bodyWrap.hidden = !isPost;\n" \
+"    });\n" \
+"  }\n" \
+"  const form = byId('playgroundForm');\n" \
+"  if (form) {\n" \
+"    form.addEventListener('submit', async (ev) => {\n" \
+"      ev.preventDefault();\n" \
+"      const [method] = sel.value.split('|');\n" \
+"      const path = pathIn.value.trim();\n" \
+"      const key = byId('pgKey') ? byId('pgKey').value.trim() : '';\n" \
+"      const outWrap = byId('pgResultWrap'), statusEl = byId('pgStatus'), outPre = byId('pgOutput');\n" \
+"      outWrap.hidden = false;\n" \
+"      statusEl.textContent = 'Sending...';\n" \
+"      const opts = { method, headers: {}, cache: 'no-store' };\n" \
+"      if (key) opts.headers['X-API-Key'] = key;\n" \
+"      if (method === 'POST') {\n" \
+"        opts.headers['Content-Type'] = 'application/json';\n" \
+"        opts.body = byId('pgBody').value;\n" \
+"      }\n" \
+"      try {\n" \
+"        const res = await fetch(path, opts);\n" \
+"        statusEl.textContent = res.status + ' ' + res.statusText;\n" \
+"        const raw = await res.text();\n" \
+"        try {\n" \
+"          outPre.textContent = JSON.stringify(JSON.parse(raw), null, 2);\n" \
+"        } catch (e) {\n" \
+"          outPre.textContent = raw;\n" \
+"        }\n" \
+"      } catch (e) {\n" \
+"        statusEl.textContent = 'Network Error';\n" \
+"        outPre.textContent = String(e);\n" \
+"      }\n" \
+"    });\n" \
+"  }\n" \
+"  async function loadSpec() {\n" \
+"    const box = byId('openapiPaths');\n" \
+"    if (!box) return;\n" \
+"    try {\n" \
+"      const res = await fetch('/openapi.json', { cache: 'no-store' });\n" \
+"      const spec = await res.json();\n" \
+"      if (!spec || !spec.paths) return;\n" \
+"      box.replaceChildren();\n" \
+"      for (const [p, methods] of Object.entries(spec.paths)) {\n" \
+"        for (const [m, info] of Object.entries(methods)) {\n" \
+"          const r = document.createElement('div');\n" \
+"          r.className = 'list-row';\n" \
+"          const left = document.createElement('span');\n" \
+"          const badge = document.createElement('span');\n" \
+"          badge.className = 'badge ' + (m === 'post' ? '' : 'ok');\n" \
+"          badge.textContent = m.toUpperCase();\n" \
+"          const code = document.createElement('code');\n" \
+"          code.textContent = ' ' + p;\n" \
+"          left.append(badge, code);\n" \
+"          const right = document.createElement('span');\n" \
+"          right.className = 'hint';\n" \
+"          right.textContent = info.summary || '';\n" \
+"          r.append(left, right);\n" \
+"          box.append(r);\n" \
+"        }\n" \
+"      }\n" \
+"    } catch (e) {}\n" \
+"  }\n" \
+"  loadSpec();\n" \
 "})();\n"
 
 #endif

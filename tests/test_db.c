@@ -113,21 +113,22 @@ int main(void) {
     CHECK(total == 2 && unique == 1);
 
     // Test 1-click self-destruct link (max_clicks = 1) and scheduled link
-    struct link_options burn_opts = { 0, 1, 0, NULL, "One-time secret", "burn,security", NULL, NULL, NULL, 0, 302 };
+    struct link_options burn_opts = { 0, 1, 0, NULL, "One-time secret", "burn,security", NULL, NULL, NULL, 0, 302, NULL, NULL };
     CHECK(insert_link_ex("burn-once", "https://example.test/secret-doc", &burn_opts) == 0);
     CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == 0);
     CHECK(record_visit_geo("burn-once", "203.0.113.5", "desktop", "direct", "RO") == 0);
     CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == -3);
 
-    struct link_options sched_opts = { 0, 0, 24, NULL, "Future launch", "launch", NULL, NULL, NULL, 0, 302 };
+    struct link_options sched_opts = { 0, 0, 24, NULL, "Future launch", "launch", NULL, NULL, NULL, 0, 302, NULL, NULL };
     CHECK(insert_link_ex("future-link", "https://example.test/launch", &sched_opts) == 0);
     CHECK(get_link("future-link", target, sizeof(target), &requires_password) == -5);
 
-    // Test smart device routing (mobile_url), A/B split testing, custom redirect_code & idempotency key lookup
+    // Test smart device routing (mobile_url), A/B split testing, Geo-routing, custom redirect_code & idempotency key lookup
     struct link_options smart_opts = {
         0, 0, 0, NULL, "Smart App Link", "launch,mobile",
         "https://m.example.test/app", "idem-key-2026-001",
-        "https://example.test/variant-b", 50, 308
+        "https://example.test/variant-b", 50, 308,
+        "RO", "https://ro.example.test/oferta"
     };
     CHECK(insert_link_ex("smart-app", "https://example.test/desktop", &smart_opts) == 0);
     char idem_slug[64];
@@ -135,12 +136,22 @@ int main(void) {
     CHECK(strcmp(idem_slug, "smart-app") == 0);
     CHECK(find_slug_by_idempotency_key("non-existent-idem", idem_slug, sizeof(idem_slug)) == -1);
     int redir_code = 0;
+    CHECK(get_link_for_visitor("smart-app", "desktop", "RO", target, sizeof(target), &requires_password, &redir_code) == 0);
+    CHECK(redir_code == 308);
+    CHECK(strcmp(target, "https://ro.example.test/oferta") == 0);
     CHECK(get_link_for_device_ex("smart-app", "desktop", target, sizeof(target), &requires_password, &redir_code) == 0);
     CHECK(redir_code == 308);
     CHECK(strcmp(target, "https://example.test/desktop") == 0 ||
           strcmp(target, "https://example.test/variant-b") == 0);
     CHECK(get_link_for_device("smart-app", "mobile", target, sizeof(target), &requires_password) == 0);
     CHECK(strcmp(target, "https://m.example.test/app") == 0);
+
+    char *maint_json = run_db_maintenance_json();
+    CHECK(maint_json != NULL);
+    if (maint_json) {
+        CHECK(strstr(maint_json, "\"status\":\"ok\"") != NULL);
+        free(maint_json);
+    }
 
     // Test bulk admin action, JSON snapshot backup & JSON snapshot restore
     const char *bulk_slugs[1] = { "smart-app" };

@@ -62,6 +62,7 @@
 "            <button id=\"importJsonBtn\" type=\"button\">Restore JSON</button>\n" \
 "            <input id=\"importJsonFile\" type=\"file\" accept=\"application/json,.json\" hidden>\n" \
 "            <button id=\"cleanupBtn\" type=\"button\">Purge Expired</button>\n" \
+"            <button id=\"maintenanceBtn\" type=\"button\">Optimize DB &amp; WAL</button>\n" \
 "            <button id=\"lock\" type=\"button\" class=\"danger\">Lock</button>\n" \
 "          </div>\n" \
 "        </div>\n" \

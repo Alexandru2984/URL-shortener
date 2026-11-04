@@ -314,6 +314,8 @@ int init_db(const char *db_path, const char *analytics_key) {
         ensure_table_column("links", "alt_url", "TEXT") != 0 ||
         ensure_table_column("links", "alt_weight", "INTEGER DEFAULT 0") != 0 ||
         ensure_table_column("links", "redirect_code", "INTEGER DEFAULT 302") != 0 ||
+        ensure_table_column("links", "geo_country", "TEXT") != 0 ||
+        ensure_table_column("links", "geo_url", "TEXT") != 0 ||
         ensure_table_column("links", "clicks_count", "INTEGER DEFAULT 0") != 0 ||
         exec_sql("create visits table", visits_sql) != 0 ||
         ensure_table_column("visits", "device_type", "TEXT DEFAULT 'unknown'") != 0 ||
@@ -352,15 +354,21 @@ int insert_link_ex(const char *slug, const char *url, const struct link_options 
     int redirect_code = (opts && (opts->redirect_code == 301 || opts->redirect_code == 302 ||
                                   opts->redirect_code == 307 || opts->redirect_code == 308))
                         ? opts->redirect_code : 302;
+    char clean_geo[4] = {0};
+    const char *geo_url = (opts && opts->geo_url && opts->geo_url[0]) ? opts->geo_url : NULL;
+    if (opts && opts->geo_country && opts->geo_country[0] && geo_url) {
+        sanitize_country_code(opts->geo_country, clean_geo, sizeof(clean_geo));
+        if (strcmp(clean_geo, "XX") == 0) clean_geo[0] = '\0';
+    }
 
     if (ttl_hours < 0 || max_clicks < 0 || activates_in_hours < 0) return -1;
 
     static const char sql[] =
-        "INSERT INTO links (slug, url, expires_at, activates_at, password, max_clicks, title, tags, mobile_url, idempotency_key, alt_url, alt_weight, redirect_code, is_active, clicks_count) "
+        "INSERT INTO links (slug, url, expires_at, activates_at, password, max_clicks, title, tags, mobile_url, idempotency_key, alt_url, alt_weight, redirect_code, geo_country, geo_url, is_active, clicks_count) "
         "VALUES (?, ?, "
         "CASE WHEN ? > 0 THEN datetime('now', '+' || ? || ' hours') ELSE NULL END, "
         "CASE WHEN ? > 0 THEN datetime('now', '+' || ? || ' hours') ELSE NULL END, "
-        "?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0);";
+        "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0);";
 
     sqlite3_stmt *statement = NULL;
     if (sqlite3_prepare_v2(db, sql, -1, &statement, NULL) != SQLITE_OK) return -1;
@@ -396,6 +404,13 @@ int insert_link_ex(const char *slug, const char *url, const struct link_options 
     else sqlite3_bind_null(statement, 13);
     sqlite3_bind_int(statement, 14, alt_weight);
     sqlite3_bind_int(statement, 15, redirect_code);
+    if (clean_geo[0] && geo_url) {
+        sqlite3_bind_text(statement, 16, clean_geo, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(statement, 17, geo_url, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(statement, 16);
+        sqlite3_bind_null(statement, 17);
+    }
 
     int rc = sqlite3_step(statement);
     OPENSSL_cleanse(password_hash, sizeof(password_hash));
@@ -500,12 +515,15 @@ static int copy_column_text(sqlite3_stmt *statement, int column, char *output, s
     return 0;
 }
 
-int get_link_for_device_ex(const char *slug, const char *device_type,
-                           char *url_out, size_t url_out_len, int *requires_password,
-                           int *redirect_code_out) {
+int get_link_for_visitor(const char *slug, const char *device_type,
+                         const char *country_code, char *url_out, size_t url_out_len,
+                         int *requires_password, int *redirect_code_out) {
     if (!slug || !url_out || url_out_len == 0 || !requires_password) return -1;
     *requires_password = 0;
     if (redirect_code_out) *redirect_code_out = 302;
+
+    char clean_country[4];
+    sanitize_country_code(country_code, clean_country, sizeof(clean_country));
 
     static const char sql[] =
         "SELECT url, password, "
@@ -517,7 +535,9 @@ int get_link_for_device_ex(const char *slug, const char *device_type,
         "mobile_url, "
         "alt_url, "
         "COALESCE(alt_weight, 0), "
-        "COALESCE(redirect_code, 302) "
+        "COALESCE(redirect_code, 302), "
+        "geo_country, "
+        "geo_url "
         "FROM links WHERE slug = ?;";
     sqlite3_stmt *statement = NULL;
     if (sqlite3_prepare_v2(db, sql, -1, &statement, NULL) != SQLITE_OK) return -1;
@@ -553,7 +573,14 @@ int get_link_for_device_ex(const char *slug, const char *device_type,
                 const unsigned char *mob = sqlite3_column_text(statement, 7);
                 const unsigned char *alt = sqlite3_column_text(statement, 8);
                 int alt_weight = sqlite3_column_int(statement, 9);
-                if (device_type && strcmp(device_type, "mobile") == 0 && mob && mob[0] != '\0') {
+                const unsigned char *geo_c = sqlite3_column_text(statement, 11);
+                const unsigned char *geo_u = sqlite3_column_text(statement, 12);
+
+                if (strcmp(clean_country, "XX") != 0 && geo_c && geo_c[0] != '\0' &&
+                    geo_u && geo_u[0] != '\0' &&
+                    strcasecmp((const char *)geo_c, clean_country) == 0) {
+                    result = copy_column_text(statement, 12, url_out, url_out_len);
+                } else if (device_type && strcmp(device_type, "mobile") == 0 && mob && mob[0] != '\0') {
                     result = copy_column_text(statement, 7, url_out, url_out_len);
                 } else if (alt && alt[0] != '\0' && alt_weight > 0 && alt_weight < 100) {
                     unsigned char rnd = 0;
@@ -573,6 +600,13 @@ int get_link_for_device_ex(const char *slug, const char *device_type,
     }
     sqlite3_finalize(statement);
     return result;
+}
+
+int get_link_for_device_ex(const char *slug, const char *device_type,
+                           char *url_out, size_t url_out_len, int *requires_password,
+                           int *redirect_code_out) {
+    return get_link_for_visitor(slug, device_type, NULL, url_out, url_out_len,
+                                requires_password, redirect_code_out);
 }
 
 int get_link_for_device(const char *slug, const char *device_type,
@@ -946,7 +980,8 @@ char *get_link_inspect_json(const char *slug) {
         "(password IS NOT NULL AND password != ''), title, tags, "
         "expires_at IS NOT NULL AND datetime('now') > expires_at, "
         "activates_at IS NOT NULL AND datetime('now') < activates_at, "
-        "mobile_url, alt_url, COALESCE(alt_weight, 0) "
+        "mobile_url, alt_url, COALESCE(alt_weight, 0), "
+        "geo_country, geo_url, COALESCE(redirect_code, 302) "
         "FROM links WHERE slug = ?;";
 
     sqlite3_stmt *stmt = NULL;
@@ -973,6 +1008,9 @@ char *get_link_inspect_json(const char *slug) {
     const char *mobile_url = (const char *)sqlite3_column_text(stmt, 13);
     const char *alt_url = (const char *)sqlite3_column_text(stmt, 14);
     int alt_weight = sqlite3_column_int(stmt, 15);
+    const char *geo_country = (const char *)sqlite3_column_text(stmt, 16);
+    const char *geo_url = (const char *)sqlite3_column_text(stmt, 17);
+    int redirect_code = sqlite3_column_int(stmt, 18);
 
     const char *status = "active";
     if (!is_active) status = "disabled";
@@ -1000,7 +1038,11 @@ char *get_link_inspect_json(const char *slug) {
     cJSON_AddBoolToObject(root, "has_password", has_password);
     cJSON_AddBoolToObject(root, "has_mobile_route", mobile_url != NULL && mobile_url[0] != '\0');
     cJSON_AddBoolToObject(root, "has_ab_split", alt_url != NULL && alt_url[0] != '\0' && alt_weight > 0);
+    cJSON_AddBoolToObject(root, "has_geo_route", geo_country != NULL && geo_country[0] != '\0' && geo_url != NULL && geo_url[0] != '\0');
+    if (geo_country && geo_country[0]) cJSON_AddStringToObject(root, "geo_country", geo_country);
+    else cJSON_AddNullToObject(root, "geo_country");
     cJSON_AddNumberToObject(root, "alt_weight", alt_weight);
+    cJSON_AddNumberToObject(root, "redirect_code", redirect_code);
     cJSON_AddNumberToObject(root, "max_clicks", max_clicks);
     cJSON_AddNumberToObject(root, "total_visits", clicks_count);
 
@@ -1358,6 +1400,50 @@ int cleanup_old_analytics(int retention_days) {
     return rc == SQLITE_DONE ? deleted : -1;
 }
 
+char *run_db_maintenance_json(void) {
+    int expired_purged = cleanup_expired_links();
+    if (expired_purged < 0) expired_purged = 0;
+
+    int ratelimits_purged = 0;
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, "DELETE FROM rate_limit WHERE timestamp < datetime('now', '-5 minutes');", -1, &stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_DONE) {
+            ratelimits_purged = sqlite3_changes(db);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    (void)exec_sql("pragma optimize", "PRAGMA optimize;");
+    int wal_frames = 0;
+    int wal_checkpointed = 0;
+    if (sqlite3_prepare_v2(db, "PRAGMA wal_checkpoint(TRUNCATE);", -1, &stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            wal_frames = sqlite3_column_int(stmt, 1);
+            wal_checkpointed = sqlite3_column_int(stmt, 2);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    int total_links, active_links, expired_links, disabled_links;
+    int total_visits, unique_visitors, active_tokens, audit_events;
+    long db_bytes = 0;
+    query_db_metrics(&total_links, &active_links, &expired_links, &disabled_links,
+                     &total_visits, &unique_visitors, &active_tokens, &audit_events, &db_bytes);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return NULL;
+    cJSON_AddStringToObject(root, "status", "ok");
+    cJSON_AddNumberToObject(root, "expired_purged", expired_purged);
+    cJSON_AddNumberToObject(root, "ratelimits_purged", ratelimits_purged);
+    cJSON_AddNumberToObject(root, "wal_frames", wal_frames);
+    cJSON_AddNumberToObject(root, "wal_checkpointed", wal_checkpointed);
+    cJSON_AddNumberToObject(root, "db_size_bytes", (double)db_bytes);
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    return out;
+}
+
 int create_api_token(const char *name, int ttl_days,
                      char *raw_token_out, size_t raw_token_len) {
     if (!name || !name[0] || ttl_days < 0 || !raw_token_out || raw_token_len < 42U) return -1;
@@ -1563,7 +1649,8 @@ char *query_admin_links_json(const char *search, const char *tag,
         "(SELECT COUNT(DISTINCT v.ip) FROM visits v WHERE v.slug = l.slug) AS unique_visits, "
         "l.title, l.tags, "
         "(l.expires_at IS NOT NULL AND datetime('now') > l.expires_at) AS is_expired, "
-        "l.mobile_url, l.alt_url, COALESCE(l.alt_weight, 0) "
+        "l.mobile_url, l.alt_url, COALESCE(l.alt_weight, 0), "
+        "l.geo_country, l.geo_url, COALESCE(l.redirect_code, 302) "
         "FROM links l "
         "WHERE (? IS NULL OR l.slug LIKE '%' || ? || '%' OR l.url LIKE '%' || ? || '%' OR COALESCE(l.title, '') LIKE '%' || ? || '%') "
         "AND (? IS NULL OR ',' || COALESCE(l.tags, '') || ',' LIKE '%,' || ? || ',%') "
@@ -1614,6 +1701,9 @@ char *query_admin_links_json(const char *search, const char *tag,
         const char *mobile_url = (const char *)sqlite3_column_text(statement, 13);
         const char *alt_url = (const char *)sqlite3_column_text(statement, 14);
         int alt_weight = sqlite3_column_int(statement, 15);
+        const char *geo_country = (const char *)sqlite3_column_text(statement, 16);
+        const char *geo_url = (const char *)sqlite3_column_text(statement, 17);
+        int redirect_code = sqlite3_column_int(statement, 18);
 
         if (!item || !cJSON_AddStringToObject(item, "slug", slug ? slug : "") ||
             !cJSON_AddStringToObject(item, "url", url ? url : "") ||
@@ -1622,6 +1712,11 @@ char *query_admin_links_json(const char *search, const char *tag,
             !(alt_url ? cJSON_AddStringToObject(item, "alt_url", alt_url)
                       : cJSON_AddNullToObject(item, "alt_url")) ||
             !cJSON_AddNumberToObject(item, "alt_weight", alt_weight) ||
+            !(geo_country ? cJSON_AddStringToObject(item, "geo_country", geo_country)
+                          : cJSON_AddNullToObject(item, "geo_country")) ||
+            !(geo_url ? cJSON_AddStringToObject(item, "geo_url", geo_url)
+                      : cJSON_AddNullToObject(item, "geo_url")) ||
+            !cJSON_AddNumberToObject(item, "redirect_code", redirect_code) ||
             !cJSON_AddStringToObject(item, "created_at", created ? created : "") ||
             !(expires ? cJSON_AddStringToObject(item, "expires_at", expires)
                       : cJSON_AddNullToObject(item, "expires_at")) ||

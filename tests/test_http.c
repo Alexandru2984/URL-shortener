@@ -166,6 +166,9 @@ int main(void) {
         CHECK(send_http_request(port, "GET", "/favicon.svg", NULL, NULL, resp, sizeof(resp)) == 200);
         CHECK(send_http_request(port, "GET", "/openapi.json", NULL, NULL, resp, sizeof(resp)) == 200);
         CHECK(strstr(resp, "\"openapi\": \"3.0.3\"") != NULL);
+        CHECK(send_http_request(port, "GET", "/docs", NULL, NULL, resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "Interactive C17 API Playground") != NULL);
+        CHECK(send_http_request(port, "GET", "/assets/docs.js", NULL, NULL, resp, sizeof(resp)) == 200);
         CHECK(send_http_request(port, "GET", "/sitemap.xml", NULL, NULL, resp, sizeof(resp)) == 200);
         CHECK(strstr(resp, "<loc>https://c.micutu.com/</loc>") != NULL);
         CHECK(send_http_request(port, "GET", "/robots.txt", NULL, NULL, resp, sizeof(resp)) == 200);
@@ -206,6 +209,9 @@ int main(void) {
         CHECK(strstr(resp, "<svg xmlns=\"http://www.w3.org/2000/svg\"") != NULL);
         CHECK(send_http_request(port, "GET", "/qr/e2e-slug.svg?theme=cyber", NULL, NULL, resp, sizeof(resp)) == 200);
         CHECK(strstr(resp, "fill=\"#38bdf8\"") != NULL);
+        CHECK(send_http_request(port, "GET", "/badge/e2e-slug.svg?color=emerald", NULL, NULL, resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "<svg xmlns=\"http://www.w3.org/2000/svg\"") != NULL);
+        CHECK(strstr(resp, "visits") != NULL);
 
         CHECK(send_http_request(port, "GET", "/api/inspect/e2e-slug", NULL, NULL, resp, sizeof(resp)) == 200);
         CHECK(strstr(resp, "https://example.test/landing") != NULL);
@@ -266,6 +272,8 @@ int main(void) {
                   resp, sizeof(resp)) == 200);
         CHECK(strstr(resp, "\"affected\":2") != NULL);
         CHECK(send_http_request(port, "GET", "/bulk-1", NULL, NULL, resp, sizeof(resp)) == 410);
+        CHECK(send_http_request(port, "POST", "/api/admin/maintenance", admin_key, "{}", resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "\"wal_checkpointed\"") != NULL);
 
         CHECK(send_http_request(port, "DELETE", "/e2e-slug", admin_key, NULL, resp, sizeof(resp)) == 200);
         CHECK(send_http_request(port, "GET", "/e2e-slug", NULL, NULL, resp, sizeof(resp)) == 404);
