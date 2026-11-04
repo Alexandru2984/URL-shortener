@@ -1,14 +1,18 @@
 #include "handlers.h"
 #include "db.h"
+#include "qr.h"
 #include "utils.h"
+#include "assets.h"
 #include "index_html.h"
 #include "password_html.h"
 #include "stats_html.h"
+#include "inspect_html.h"
 #include "error_html.h"
 #include "admin_html.h"
 #include <arpa/inet.h>
 #include <cjson/cJSON.h>
 #include <ctype.h>
+#include <errno.h>
 #include <math.h>
 #include <openssl/crypto.h>
 #include <stdio.h>
@@ -21,8 +25,11 @@
 #define MAX_SLUG_LEN 32U
 #define MAX_SLUG_LENGTH (MAX_SLUG_LEN - 1U)
 #define MAX_PASSWORD_LEN 128U
+#define MAX_TITLE_LEN 160U
+#define MAX_TAGS_LEN 128U
 #define MAX_REQUEST_BODY 8192U
 #define MAX_TTL_HOURS 8760
+#define MAX_CLICKS_LIMIT 1000000
 #define MAX_FULL_URL_LEN 512U
 
 #define CREATE_RATE_LIMIT 20
@@ -43,6 +50,7 @@ struct connection_info_struct {
 static void add_security_headers(struct MHD_Response *response) {
     MHD_add_response_header(response, "X-Content-Type-Options", "nosniff");
     MHD_add_response_header(response, "X-Frame-Options", "DENY");
+    MHD_add_response_header(response, "X-Permitted-Cross-Domain-Policies", "none");
     MHD_add_response_header(response, "Referrer-Policy", "no-referrer");
     MHD_add_response_header(response, "Permissions-Policy", "geolocation=(), microphone=(), camera=()");
     MHD_add_response_header(response, "Cross-Origin-Opener-Policy", "same-origin");
@@ -52,8 +60,7 @@ static void add_security_headers(struct MHD_Response *response) {
     MHD_add_response_header(response, "Content-Security-Policy",
                             "default-src 'self'; base-uri 'none'; form-action 'self'; "
                             "frame-ancestors 'none'; object-src 'none'; connect-src 'self'; "
-                            "img-src 'self' data:; script-src 'self' 'unsafe-inline'; "
-                            "style-src 'self' 'unsafe-inline'");
+                            "img-src 'self' data:; script-src 'self'; style-src 'self'");
 }
 
 static int send_json_response(struct MHD_Connection *connection, unsigned int status_code,
@@ -121,6 +128,28 @@ static int send_html_dynamic(struct MHD_Connection *connection, unsigned int sta
     return ret;
 }
 
+static int send_dynamic_buffer(struct MHD_Connection *connection, unsigned int status_code,
+                               char *buffer, const char *content_type,
+                               const char *content_disposition) {
+    if (!buffer) return MHD_NO;
+
+    struct MHD_Response *response = MHD_create_response_from_buffer(
+        strlen(buffer), buffer, MHD_RESPMEM_MUST_FREE);
+    if (!response) {
+        free(buffer);
+        return MHD_NO;
+    }
+
+    MHD_add_response_header(response, "Content-Type", content_type);
+    if (content_disposition) {
+        MHD_add_response_header(response, "Content-Disposition", content_disposition);
+    }
+    add_security_headers(response);
+    int ret = MHD_queue_response(connection, status_code, response);
+    MHD_destroy_response(response);
+    return ret;
+}
+
 static int send_text_response(struct MHD_Connection *connection, unsigned int status_code,
                               const char *text, const char *content_type) {
     struct MHD_Response *response = MHD_create_response_from_buffer(
@@ -167,7 +196,7 @@ static int api_key_is_configured(void) {
     return g_api_key && g_api_key[0] != '\0';
 }
 
-static int check_api_key(struct MHD_Connection *connection) {
+static int check_admin_api_key(struct MHD_Connection *connection) {
     if (!api_key_is_configured()) return 0;
 
     const char *provided = MHD_lookup_connection_value(
@@ -180,9 +209,28 @@ static int check_api_key(struct MHD_Connection *connection) {
     return CRYPTO_memcmp(g_api_key, provided, expected_len) == 0;
 }
 
+static int check_create_permission(struct MHD_Connection *connection,
+                                   char *actor_out, size_t actor_len) {
+    if (check_admin_api_key(connection)) {
+        if (actor_out && actor_len > 0) snprintf(actor_out, actor_len, "%s", "admin");
+        return 1;
+    }
+
+    const char *provided = MHD_lookup_connection_value(
+        connection, MHD_HEADER_KIND, "X-API-Key");
+    if (!provided) {
+        provided = MHD_lookup_connection_value(
+            connection, MHD_HEADER_KIND, "X-Creator-Token");
+    }
+    if (!provided) return 0;
+    return verify_creator_token(provided, actor_out, actor_len);
+}
+
 static int is_reserved_slug(const char *slug) {
     static const char *const reserved[] = {
-        "admin", "api", "favicon.ico", "health", "robots.txt", "stats", "unlock"
+        "admin", "api", "assets", "favicon.ico", "favicon.svg", "health",
+        "inspect", "manifest.json", "qr", "robots.txt", "shorten",
+        "sitemap.xml", "stats", "unlock"
     };
 
     for (size_t i = 0; i < sizeof(reserved) / sizeof(reserved[0]); i++) {
@@ -225,6 +273,21 @@ static void get_client_ip(struct MHD_Connection *connection, char *output, sockl
     snprintf(output, output_len, "%s", "unknown");
 }
 
+static void record_request_visit(struct MHD_Connection *connection,
+                                 const char *slug, const char *client_ip) {
+    const char *ua = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "User-Agent");
+    const char *ref = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "Referer");
+
+    char device[16];
+    char ref_domain[128];
+    classify_user_agent(ua, device, sizeof(device));
+    classify_referrer(ref, g_base_url, ref_domain, sizeof(ref_domain));
+
+    if (record_visit_ex(slug, client_ip, device, ref_domain) != 0) {
+        log_error("Could not record visit for %s", slug);
+    }
+}
+
 static int is_json_content_type(struct MHD_Connection *connection) {
     const char *content_type = MHD_lookup_connection_value(
         connection, MHD_HEADER_KIND, "Content-Type");
@@ -257,35 +320,43 @@ static cJSON *parse_json_body(const struct connection_info_struct *info) {
     return json;
 }
 
-static int get_optional_password(cJSON *json, const char **password_out) {
-    cJSON *password = cJSON_GetObjectItemCaseSensitive(json, "password");
-    *password_out = NULL;
-    if (!password || cJSON_IsNull(password)) return 0;
-    if (!cJSON_IsString(password) || !password->valuestring) return -1;
+static int get_optional_string(cJSON *json, const char *key, size_t max_len,
+                               const char **out_val) {
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(json, key);
+    *out_val = NULL;
+    if (!item || cJSON_IsNull(item)) return 0;
+    if (!cJSON_IsString(item) || !item->valuestring) return -1;
 
-    size_t password_len = strnlen(password->valuestring, MAX_PASSWORD_LEN + 1U);
-    if (password_len > MAX_PASSWORD_LEN) return -1;
-    if (password_len > 0) *password_out = password->valuestring;
+    size_t len = strnlen(item->valuestring, max_len + 1U);
+    if (len > max_len) return -1;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)item->valuestring[i];
+        if (c < 0x20U || c == 0x7fU) return -1;
+    }
+    if (len > 0) *out_val = item->valuestring;
     return 0;
 }
 
-static int get_ttl_hours(cJSON *json, int *ttl_out) {
-    cJSON *ttl = cJSON_GetObjectItemCaseSensitive(json, "ttl_hours");
-    *ttl_out = 0;
-    if (!ttl || cJSON_IsNull(ttl)) return 0;
-    if (!cJSON_IsNumber(ttl) || !isfinite(ttl->valuedouble) ||
-        floor(ttl->valuedouble) != ttl->valuedouble || ttl->valuedouble < 0 ||
-        ttl->valuedouble > MAX_TTL_HOURS) {
+static int get_optional_int_range(cJSON *json, const char *key,
+                                  int min_val, int max_val, int default_val,
+                                  int *out_val) {
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(json, key);
+    *out_val = default_val;
+    if (!item || cJSON_IsNull(item)) return 0;
+    if (!cJSON_IsNumber(item) || !isfinite(item->valuedouble) ||
+        floor(item->valuedouble) != item->valuedouble ||
+        item->valuedouble < (double)min_val || item->valuedouble > (double)max_val) {
         return -1;
     }
-
-    *ttl_out = (int)ttl->valuedouble;
+    *out_val = (int)item->valuedouble;
     return 0;
 }
 
 static int handle_shorten(struct MHD_Connection *connection, const char *client_ip,
                           cJSON *json) {
-    if (!check_api_key(connection)) {
+    char actor[64];
+    if (!check_create_permission(connection, actor, sizeof(actor))) {
+        (void)record_audit_event("auth.failed", "anonymous", "/shorten", client_ip, "Invalid API key or token");
         return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
     }
     if (check_rate_limit(client_ip, CREATE_RATE_LIMIT) != 0) {
@@ -295,18 +366,32 @@ static int handle_shorten(struct MHD_Connection *connection, const char *client_
     cJSON *target_url = cJSON_GetObjectItemCaseSensitive(json, "url");
     cJSON *custom_slug = cJSON_GetObjectItemCaseSensitive(json, "custom_slug");
     if (!cJSON_IsString(target_url) || !target_url->valuestring ||
-        !is_valid_http_url(target_url->valuestring, MAX_URL_LEN)) {
-        return send_error(connection, MHD_HTTP_BAD_REQUEST, "A valid HTTP or HTTPS URL is required");
+        !is_safe_redirect_url(target_url->valuestring, g_base_url, MAX_URL_LEN)) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST,
+                          "A valid public HTTP or HTTPS URL is required");
     }
 
-    int ttl_hours;
-    if (get_ttl_hours(json, &ttl_hours) != 0) {
+    struct link_options opts;
+    memset(&opts, 0, sizeof(opts));
+
+    if (get_optional_int_range(json, "ttl_hours", 0, MAX_TTL_HOURS, 0, &opts.ttl_hours) != 0) {
         return send_error(connection, MHD_HTTP_BAD_REQUEST, "ttl_hours must be a whole number from 0 to 8760");
     }
-
-    const char *password = NULL;
-    if (get_optional_password(json, &password) != 0) {
+    if (get_optional_int_range(json, "max_clicks", 0, MAX_CLICKS_LIMIT, 0, &opts.max_clicks) != 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "max_clicks must be between 0 and 1000000");
+    }
+    if (get_optional_int_range(json, "activates_in_hours", 0, MAX_TTL_HOURS, 0, &opts.activates_in_hours) != 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "activates_in_hours must be between 0 and 8760");
+    }
+    if (get_optional_string(json, "password", MAX_PASSWORD_LEN, &opts.password) != 0) {
         return send_error(connection, MHD_HTTP_BAD_REQUEST, "Password is too long or invalid");
+    }
+    if (get_optional_string(json, "title", MAX_TITLE_LEN, &opts.title) != 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Title is too long or invalid");
+    }
+    if (get_optional_string(json, "tags", MAX_TAGS_LEN, &opts.tags) != 0 ||
+        !is_valid_tag_list(opts.tags, MAX_TAGS_LEN)) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Tags must be comma-separated alphanumeric labels");
     }
 
     char slug[MAX_SLUG_LEN];
@@ -330,7 +415,7 @@ static int handle_shorten(struct MHD_Connection *connection, const char *client_
             log_error("Secure random generator failed while creating a slug");
             return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Could not allocate a secure slug");
         }
-        insert_result = insert_link(slug, target_url->valuestring, ttl_hours, password);
+        insert_result = insert_link_ex(slug, target_url->valuestring, &opts);
         if (insert_result == 0) break;
     }
     if (insert_result != 0) {
@@ -339,14 +424,25 @@ static int handle_shorten(struct MHD_Connection *connection, const char *client_
     }
 
     char full_url[MAX_FULL_URL_LEN];
+    char qr_url[MAX_FULL_URL_LEN];
+    char stats_url[MAX_FULL_URL_LEN];
+    char inspect_url[MAX_FULL_URL_LEN];
     int full_url_len = snprintf(full_url, sizeof(full_url), "%s/%s", g_base_url, slug);
+    snprintf(qr_url, sizeof(qr_url), "%s/qr/%s.svg", g_base_url, slug);
+    snprintf(stats_url, sizeof(stats_url), "%s/stats/%s", g_base_url, slug);
+    snprintf(inspect_url, sizeof(inspect_url), "%s/inspect/%s", g_base_url, slug);
     if (full_url_len < 0 || (size_t)full_url_len >= sizeof(full_url)) {
         log_error("Configured base URL is too long");
         return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Service configuration error");
     }
 
     cJSON *response_json = cJSON_CreateObject();
-    if (!response_json || !cJSON_AddStringToObject(response_json, "short_url", full_url)) {
+    if (!response_json ||
+        !cJSON_AddStringToObject(response_json, "short_url", full_url) ||
+        !cJSON_AddStringToObject(response_json, "slug", slug) ||
+        !cJSON_AddStringToObject(response_json, "qr_url", qr_url) ||
+        !cJSON_AddStringToObject(response_json, "stats_url", stats_url) ||
+        !cJSON_AddStringToObject(response_json, "inspect_url", inspect_url)) {
         cJSON_Delete(response_json);
         return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Memory error");
     }
@@ -354,9 +450,10 @@ static int handle_shorten(struct MHD_Connection *connection, const char *client_
     cJSON_Delete(response_json);
     if (!response_text) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Memory error");
 
+    (void)record_audit_event("link.create", actor, slug, client_ip, target_url->valuestring);
     int ret = send_json_response(connection, MHD_HTTP_CREATED, response_text);
     free(response_text);
-    log_message("Created short link: %s", slug);
+    log_message("Created short link: %s (by %s)", slug, actor);
     return ret;
 }
 
@@ -383,11 +480,19 @@ static int handle_unlock(struct MHD_Connection *connection, const char *client_i
     char target_url[MAX_URL_BUFFER];
     int db_result = get_link_with_password(slug, password->valuestring,
                                            target_url, sizeof(target_url));
-    if (db_result == -2) return send_error(connection, MHD_HTTP_GONE, "Link expired");
-    if (db_result == -4) return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Wrong password");
-    if (db_result != 0 || !is_valid_http_url(target_url, MAX_URL_LEN)) {
+    if (db_result == -2 || db_result == -3) return send_error(connection, MHD_HTTP_GONE, "Link expired or click limit reached");
+    if (db_result == -5) return send_error(connection, MHD_HTTP_FORBIDDEN, "Link is not active yet");
+    if (db_result == -6) return send_error(connection, MHD_HTTP_GONE, "Link is disabled");
+    if (db_result == -4) {
+        (void)record_audit_event("link.unlock_failed", "visitor", slug, client_ip, "Wrong password");
+        return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Wrong password");
+    }
+    if (db_result != 0 || !is_safe_redirect_url(target_url, g_base_url, MAX_URL_LEN)) {
         return send_error(connection, MHD_HTTP_NOT_FOUND, "Not found");
     }
+
+    // Record visit on successful unlock so password-protected links track visits and enforce max_clicks
+    record_request_visit(connection, slug, client_ip);
 
     cJSON *response_json = cJSON_CreateObject();
     if (!response_json || !cJSON_AddStringToObject(response_json, "url", target_url)) {
@@ -403,18 +508,284 @@ static int handle_unlock(struct MHD_Connection *connection, const char *client_i
     return ret;
 }
 
+static int handle_admin_update_link(struct MHD_Connection *connection, const char *client_ip,
+                                    const char *slug, cJSON *json) {
+    if (!check_admin_api_key(connection)) {
+        (void)record_audit_event("auth.failed", "anonymous", slug, client_ip, "Admin update unauthorized");
+        return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
+    }
+    if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+        return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+    }
+    if (!is_valid_slug(slug, MAX_SLUG_LENGTH) || is_reserved_slug(slug)) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid slug");
+    }
+
+    cJSON *target_url = cJSON_GetObjectItemCaseSensitive(json, "url");
+    if (!cJSON_IsString(target_url) || !target_url->valuestring ||
+        !is_safe_redirect_url(target_url->valuestring, g_base_url, MAX_URL_LEN)) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "A valid public HTTP or HTTPS URL is required");
+    }
+
+    const char *title = NULL;
+    const char *tags = NULL;
+    if (get_optional_string(json, "title", MAX_TITLE_LEN, &title) != 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid title");
+    }
+    if (get_optional_string(json, "tags", MAX_TAGS_LEN, &tags) != 0 ||
+        !is_valid_tag_list(tags, MAX_TAGS_LEN)) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid tags");
+    }
+
+    int ttl_hours = -1;
+    int max_clicks = 0;
+    if (get_optional_int_range(json, "ttl_hours", -1, MAX_TTL_HOURS, -1, &ttl_hours) != 0 ||
+        get_optional_int_range(json, "max_clicks", 0, MAX_CLICKS_LIMIT, 0, &max_clicks) != 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid ttl_hours or max_clicks");
+    }
+
+    int is_active = 1;
+    cJSON *active_item = cJSON_GetObjectItemCaseSensitive(json, "is_active");
+    if (active_item) {
+        if (cJSON_IsBool(active_item)) is_active = cJSON_IsTrue(active_item) ? 1 : 0;
+        else if (cJSON_IsNumber(active_item)) is_active = active_item->valueint ? 1 : 0;
+        else return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid is_active flag");
+    }
+
+    const char *new_password = NULL;
+    cJSON *pwd_item = cJSON_GetObjectItemCaseSensitive(json, "password");
+    if (pwd_item && !cJSON_IsNull(pwd_item)) {
+        if (!cJSON_IsString(pwd_item) || !pwd_item->valuestring ||
+            strnlen(pwd_item->valuestring, MAX_PASSWORD_LEN + 1U) > MAX_PASSWORD_LEN) {
+            return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid password");
+        }
+        new_password = pwd_item->valuestring;
+    }
+
+    if (update_link(slug, target_url->valuestring, title, tags, ttl_hours,
+                    max_clicks, is_active, new_password) != 0) {
+        return send_error(connection, MHD_HTTP_NOT_FOUND, "Link not found");
+    }
+
+    (void)record_audit_event("link.update", "admin", slug, client_ip, target_url->valuestring);
+    return send_json_response(connection, MHD_HTTP_OK, "{\"updated\":true}");
+}
+
+static int handle_admin_create_token(struct MHD_Connection *connection, const char *client_ip,
+                                     cJSON *json) {
+    if (!check_admin_api_key(connection)) {
+        return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
+    }
+    if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+        return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+    }
+
+    const char *name = NULL;
+    int ttl_days = 0;
+    if (get_optional_string(json, "name", 64U, &name) != 0 || !name ||
+        get_optional_int_range(json, "ttl_days", 0, 3650, 0, &ttl_days) != 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Valid token name and optional ttl_days required");
+    }
+
+    char raw_token[64];
+    if (create_api_token(name, ttl_days, raw_token, sizeof(raw_token)) != 0) {
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Could not create token");
+    }
+
+    cJSON *res = cJSON_CreateObject();
+    if (!res || !cJSON_AddStringToObject(res, "name", name) ||
+        !cJSON_AddStringToObject(res, "token", raw_token)) {
+        cJSON_Delete(res);
+        OPENSSL_cleanse(raw_token, sizeof(raw_token));
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Memory error");
+    }
+    OPENSSL_cleanse(raw_token, sizeof(raw_token));
+    char *text = cJSON_PrintUnformatted(res);
+    cJSON_Delete(res);
+    if (!text) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Memory error");
+
+    (void)record_audit_event("token.create", "admin", name, client_ip, "Created scoped creator token");
+    int ret = send_json_response(connection, MHD_HTTP_CREATED, text);
+    free(text);
+    return ret;
+}
+
+static int handle_admin_cleanup(struct MHD_Connection *connection, const char *client_ip) {
+    if (!check_admin_api_key(connection)) {
+        return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
+    }
+    if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+        return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+    }
+
+    int expired = cleanup_expired_links();
+    if (expired < 0) expired = 0;
+
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{\"expired_removed\":%d}", expired);
+    (void)record_audit_event("admin.cleanup", "admin", NULL, client_ip, buf);
+    return send_json_response(connection, MHD_HTTP_OK, buf);
+}
+
+static int handle_inspect_page(struct MHD_Connection *connection, const char *slug,
+                               const char *client_ip) {
+    if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
+        return send_error_page(connection, MHD_HTTP_BAD_REQUEST, "Bad Request", "The link identifier is invalid.");
+    }
+    if (check_rate_limit(client_ip, STATS_RATE_LIMIT) != 0) {
+        return send_error_page(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Too Many Requests", "Please wait a moment and try again.");
+    }
+
+    char *json_str = get_link_inspect_json(slug);
+    if (!json_str) {
+        return send_error_page(connection, MHD_HTTP_NOT_FOUND, "Not Found", "This short link does not exist.");
+    }
+
+    cJSON *info = cJSON_Parse(json_str);
+    free(json_str);
+    if (!info) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Memory error");
+
+    const char *status = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(info, "status"));
+    const char *title = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(info, "title"));
+    const char *target = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(info, "target_url"));
+    const char *created = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(info, "created_at"));
+    const char *expires = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(info, "expires_at"));
+    int has_pwd = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(info, "has_password"));
+    cJSON *visits_item = cJSON_GetObjectItemCaseSensitive(info, "total_visits");
+    int visits = visits_item ? visits_item->valueint : 0;
+
+    char esc_status[64], esc_title[256], esc_target[2200], esc_created[64], esc_expires[64];
+    html_escape(status ? status : "active", esc_status, sizeof(esc_status));
+    html_escape(title ? title : "-", esc_title, sizeof(esc_title));
+    html_escape(has_pwd ? "Protected (Requires Password)" : (target ? target : "Unavailable"),
+                esc_target, sizeof(esc_target));
+    html_escape(created ? created : "-", esc_created, sizeof(esc_created));
+    html_escape(expires ? expires : "Never", esc_expires, sizeof(esc_expires));
+    cJSON_Delete(info);
+
+    const char *pwd_label = has_pwd ? "Yes (PBKDF2-SHA256)" : "No";
+    int html_len = snprintf(NULL, 0, INSPECT_HTML_TEMPLATE,
+                            slug, slug, slug, slug,
+                            esc_status, esc_title, esc_target, pwd_label,
+                            visits, esc_created, esc_expires,
+                            slug, slug, slug);
+    if (html_len < 0) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Rendering error");
+
+    char *html = malloc((size_t)html_len + 1U);
+    if (!html) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Memory error");
+    snprintf(html, (size_t)html_len + 1U, INSPECT_HTML_TEMPLATE,
+             slug, slug, slug, slug,
+             esc_status, esc_title, esc_target, pwd_label,
+             visits, esc_created, esc_expires,
+             slug, slug, slug);
+    return send_html_dynamic(connection, MHD_HTTP_OK, html);
+}
+
+static int handle_qr_request(struct MHD_Connection *connection, const char *raw_slug,
+                             const char *client_ip) {
+    char slug[MAX_SLUG_LEN];
+    size_t raw_len = strnlen(raw_slug, MAX_SLUG_LEN + 8U);
+    if (raw_len == 0 || raw_len >= MAX_SLUG_LEN + 5U) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid slug");
+    }
+
+    if (raw_len > 4U && strcmp(raw_slug + raw_len - 4U, ".svg") == 0) {
+        raw_len -= 4U;
+    }
+    if (raw_len >= sizeof(slug)) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid slug");
+    }
+    memcpy(slug, raw_slug, raw_len);
+    slug[raw_len] = '\0';
+
+    if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid slug");
+    }
+    if (check_rate_limit(client_ip, STATS_RATE_LIMIT) != 0) {
+        return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+    }
+
+    char ignored_url[MAX_URL_BUFFER];
+    int requires_pwd = 0;
+    int db_res = get_link(slug, ignored_url, sizeof(ignored_url), &requires_pwd);
+    if (db_res == -1) {
+        return send_error(connection, MHD_HTTP_NOT_FOUND, "Link not found");
+    }
+
+    char full_url[MAX_FULL_URL_LEN];
+    int len = snprintf(full_url, sizeof(full_url), "%s/%s", g_base_url, slug);
+    if (len < 0 || (size_t)len >= sizeof(full_url)) {
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Configuration error");
+    }
+
+    char *svg = qr_generate_svg(full_url, 4);
+    if (!svg) {
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Could not generate QR SVG");
+    }
+    return send_dynamic_buffer(connection, MHD_HTTP_OK, svg, "image/svg+xml; charset=utf-8", NULL);
+}
+
 static int handle_get(struct MHD_Connection *connection, const char *url, const char *client_ip) {
     if (strcmp(url, "/health") == 0) {
         return send_json_response(connection, MHD_HTTP_OK, "{\"status\":\"ok\"}");
     }
 
-    if (strcmp(url, "/robots.txt") == 0) {
-        static const char robots[] = "User-agent: *\nDisallow: /stats/\nDisallow: /admin\nDisallow: /api/\n";
-        return send_text_response(connection, MHD_HTTP_OK, robots, "text/plain; charset=utf-8");
+    // Static C-embedded assets (enables strict CSP with zero 'unsafe-inline')
+    if (strcmp(url, "/assets/styles.css") == 0) {
+        return send_text_response(connection, MHD_HTTP_OK, APP_CSS, "text/css; charset=utf-8");
     }
-
+    if (strcmp(url, "/assets/index.js") == 0) {
+        return send_text_response(connection, MHD_HTTP_OK, INDEX_JS, "application/javascript; charset=utf-8");
+    }
+    if (strcmp(url, "/assets/admin.js") == 0) {
+        return send_text_response(connection, MHD_HTTP_OK, ADMIN_JS, "application/javascript; charset=utf-8");
+    }
+    if (strcmp(url, "/assets/password.js") == 0) {
+        return send_text_response(connection, MHD_HTTP_OK, PASSWORD_JS, "application/javascript; charset=utf-8");
+    }
+    if (strcmp(url, "/assets/stats.js") == 0) {
+        return send_text_response(connection, MHD_HTTP_OK, STATS_JS, "application/javascript; charset=utf-8");
+    }
+    if (strcmp(url, "/favicon.svg") == 0) {
+        return send_text_response(connection, MHD_HTTP_OK, FAVICON_SVG, "image/svg+xml; charset=utf-8");
+    }
     if (strcmp(url, "/favicon.ico") == 0) {
         return send_empty_response(connection, MHD_HTTP_NO_CONTENT);
+    }
+    if (strcmp(url, "/manifest.json") == 0) {
+        return send_text_response(connection, MHD_HTTP_OK, MANIFEST_JSON, "application/manifest+json; charset=utf-8");
+    }
+
+    if (strcmp(url, "/robots.txt") == 0) {
+        char *robots = malloc(512U);
+        if (!robots) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Memory error");
+        snprintf(robots, 512U,
+                 "User-agent: *\n"
+                 "Allow: /\n"
+                 "Disallow: /stats/\n"
+                 "Disallow: /inspect/\n"
+                 "Disallow: /qr/\n"
+                 "Disallow: /admin\n"
+                 "Disallow: /api/\n"
+                 "Sitemap: %s/sitemap.xml\n",
+                 g_base_url);
+        return send_dynamic_buffer(connection, MHD_HTTP_OK, robots, "text/plain; charset=utf-8", NULL);
+    }
+
+    if (strcmp(url, "/sitemap.xml") == 0) {
+        char *sitemap = malloc(1024U);
+        if (!sitemap) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Memory error");
+        snprintf(sitemap, 1024U,
+                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                 "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n"
+                 "  <url>\n"
+                 "    <loc>%s/</loc>\n"
+                 "    <changefreq>weekly</changefreq>\n"
+                 "    <priority>1.0</priority>\n"
+                 "  </url>\n"
+                 "</urlset>\n",
+                 g_base_url);
+        return send_dynamic_buffer(connection, MHD_HTTP_OK, sitemap, "application/xml; charset=utf-8", NULL);
     }
 
     // The page itself has no privileged data. The API key is entered in-memory by the user.
@@ -427,18 +798,101 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
     }
 
     if (strcmp(url, "/api/admin/links") == 0) {
-        if (!check_api_key(connection)) {
+        if (!check_admin_api_key(connection)) {
             return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
         }
         if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
             return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
         }
 
-        char *json = get_all_links_json();
+        const char *q = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "q");
+        const char *tag = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "tag");
+        const char *status = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "status");
+        char *json = query_admin_links_json(q, tag, status, 1000, 0);
         if (!json) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Database error");
         int ret = send_json_response(connection, MHD_HTTP_OK, json);
         free(json);
         return ret;
+    }
+
+    if (strcmp(url, "/api/admin/export.csv") == 0) {
+        if (!check_admin_api_key(connection)) {
+            return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
+        }
+        if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+            return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+        }
+        char *csv = export_links_csv();
+        if (!csv) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Database error");
+        (void)record_audit_event("admin.export_csv", "admin", NULL, client_ip, "Exported links CSV");
+        return send_dynamic_buffer(connection, MHD_HTTP_OK, csv, "text/csv; charset=utf-8",
+                                   "attachment; filename=\"shortener-links.csv\"");
+    }
+
+    if (strcmp(url, "/api/admin/tokens") == 0) {
+        if (!check_admin_api_key(connection)) {
+            return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
+        }
+        if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+            return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+        }
+        char *json = list_api_tokens_json();
+        if (!json) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Database error");
+        int ret = send_json_response(connection, MHD_HTTP_OK, json);
+        free(json);
+        return ret;
+    }
+
+    if (strcmp(url, "/api/admin/audit") == 0) {
+        if (!check_admin_api_key(connection)) {
+            return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
+        }
+        if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+            return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+        }
+        char *json = get_audit_logs_json(100);
+        if (!json) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Database error");
+        int ret = send_json_response(connection, MHD_HTTP_OK, json);
+        free(json);
+        return ret;
+    }
+
+    if (strncmp(url, "/api/stats/", 11) == 0) {
+        const char *slug = url + 11;
+        if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
+            return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid slug");
+        }
+        if (check_rate_limit(client_ip, STATS_RATE_LIMIT) != 0) {
+            return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+        }
+        char *json = get_detailed_stats_json(slug);
+        if (!json) return send_error(connection, MHD_HTTP_NOT_FOUND, "Link not found");
+        int ret = send_json_response(connection, MHD_HTTP_OK, json);
+        free(json);
+        return ret;
+    }
+
+    if (strncmp(url, "/api/inspect/", 13) == 0) {
+        const char *slug = url + 13;
+        if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
+            return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid slug");
+        }
+        if (check_rate_limit(client_ip, STATS_RATE_LIMIT) != 0) {
+            return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+        }
+        char *json = get_link_inspect_json(slug);
+        if (!json) return send_error(connection, MHD_HTTP_NOT_FOUND, "Link not found");
+        int ret = send_json_response(connection, MHD_HTTP_OK, json);
+        free(json);
+        return ret;
+    }
+
+    if (strncmp(url, "/qr/", 4) == 0) {
+        return handle_qr_request(connection, url + 4, client_ip);
+    }
+
+    if (strncmp(url, "/inspect/", 9) == 0) {
+        return handle_inspect_page(connection, url + 9, client_ip);
     }
 
     if (strncmp(url, "/stats/", 7) == 0) {
@@ -454,7 +908,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         char ignored_url[MAX_URL_BUFFER];
         int db_result = get_link(slug, ignored_url, sizeof(ignored_url), &requires_password);
         if (db_result == -1) return send_error_page(connection, MHD_HTTP_NOT_FOUND, "Not Found", "This short link does not exist.");
-        if (db_result == -2) return send_error_page(connection, MHD_HTTP_GONE, "Link Expired", "This short link has expired.");
+        if (db_result == -2 || db_result == -3) return send_error_page(connection, MHD_HTTP_GONE, "Link Expired", "This short link has expired or reached its click limit.");
 
         int total = 0;
         int unique = 0;
@@ -462,11 +916,11 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
             return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Database error");
         }
 
-        int html_len = snprintf(NULL, 0, STATS_HTML, slug, total, unique);
+        int html_len = snprintf(NULL, 0, STATS_HTML, slug, slug, slug, slug, slug, total, unique, slug);
         if (html_len < 0) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Rendering error");
         char *html = malloc((size_t)html_len + 1U);
         if (!html) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Memory error");
-        snprintf(html, (size_t)html_len + 1U, STATS_HTML, slug, total, unique);
+        snprintf(html, (size_t)html_len + 1U, STATS_HTML, slug, slug, slug, slug, slug, total, unique, slug);
         return send_html_dynamic(connection, MHD_HTTP_OK, html);
     }
 
@@ -475,6 +929,14 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
     }
 
     const char *slug = url + 1;
+    size_t slug_raw_len = strnlen(slug, MAX_SLUG_LEN + 2U);
+    if (slug_raw_len > 1U && slug_raw_len <= MAX_SLUG_LEN && slug[slug_raw_len - 1U] == '+') {
+        char clean_slug[MAX_SLUG_LEN];
+        memcpy(clean_slug, slug, slug_raw_len - 1U);
+        clean_slug[slug_raw_len - 1U] = '\0';
+        return handle_inspect_page(connection, clean_slug, client_ip);
+    }
+
     if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
         return send_error_page(connection, MHD_HTTP_NOT_FOUND, "Not Found", "This short link does not exist.");
     }
@@ -482,22 +944,29 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
     char target_url[MAX_URL_BUFFER];
     int requires_password = 0;
     int db_result = get_link(slug, target_url, sizeof(target_url), &requires_password);
-    if (db_result == -2) {
-        return send_error_page(connection, MHD_HTTP_GONE, "Link Expired", "This short link has expired.");
+    if (db_result == -2 || db_result == -3) {
+        return send_error_page(connection, MHD_HTTP_GONE, "Link Expired",
+                               "This short link has expired or reached its maximum click limit.");
+    }
+    if (db_result == -5) {
+        return send_error_page(connection, MHD_HTTP_FORBIDDEN, "Not Active Yet",
+                               "This scheduled short link is not active yet.");
+    }
+    if (db_result == -6) {
+        return send_error_page(connection, MHD_HTTP_GONE, "Link Disabled",
+                               "This short link has been disabled by the administrator.");
     }
     if (db_result != 0) {
         return send_error_page(connection, MHD_HTTP_NOT_FOUND, "Not Found", "This short link does not exist.");
     }
 
     if (requires_password) return send_html(connection, MHD_HTTP_OK, PASSWORD_HTML);
-    if (!is_valid_http_url(target_url, MAX_URL_LEN)) {
-        log_error("Refused redirect for malformed stored URL on slug %s", slug);
+    if (!is_safe_redirect_url(target_url, g_base_url, MAX_URL_LEN)) {
+        log_error("Refused redirect for unsafe stored URL on slug %s", slug);
         return send_error_page(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Unavailable", "This link cannot be redirected safely.");
     }
 
-    if (record_visit(slug, client_ip) != 0) {
-        log_error("Could not record visit for %s", slug);
-    }
+    record_request_visit(connection, slug, client_ip);
     log_message("Redirected short link: %s", slug);
 
     static const char empty[] = "";
@@ -513,11 +982,27 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
 
 static int handle_delete(struct MHD_Connection *connection, const char *url,
                          const char *client_ip) {
-    if (!check_api_key(connection)) {
+    if (!check_admin_api_key(connection)) {
+        (void)record_audit_event("auth.failed", "anonymous", url, client_ip, "Unauthorized DELETE");
         return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
     }
     if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
         return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+    }
+
+    if (strncmp(url, "/api/admin/tokens/", 18) == 0) {
+        const char *id_str = url + 18;
+        char *end = NULL;
+        errno = 0;
+        long token_id = strtol(id_str, &end, 10);
+        if (errno != 0 || end == id_str || *end != '\0' || token_id < 1 || token_id > 1000000) {
+            return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid token ID");
+        }
+        if (revoke_api_token((int)token_id) != 0) {
+            return send_error(connection, MHD_HTTP_NOT_FOUND, "Token not found");
+        }
+        (void)record_audit_event("token.revoke", "admin", id_str, client_ip, "Revoked scoped creator token");
+        return send_json_response(connection, MHD_HTTP_OK, "{\"revoked\":true}");
     }
 
     const char *slug = url + 1;
@@ -527,6 +1012,7 @@ static int handle_delete(struct MHD_Connection *connection, const char *url,
 
     if (delete_link(slug) != 0) return send_error(connection, MHD_HTTP_NOT_FOUND, "Slug not found");
 
+    (void)record_audit_event("link.delete", "admin", slug, client_ip, "Deleted link");
     log_message("Deleted short link: %s", slug);
     return send_json_response(connection, MHD_HTTP_OK, "{\"deleted\":true}");
 }
@@ -549,7 +1035,7 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
     char client_ip[INET6_ADDRSTRLEN];
     get_client_ip(connection, client_ip, (socklen_t)sizeof(client_ip));
 
-    if (strcasecmp(method, "POST") == 0) {
+    if (strcasecmp(method, "POST") == 0 || strcasecmp(method, "PUT") == 0) {
         if (*upload_data_size != 0) {
             if (info->body_too_large || *upload_data_size > MAX_REQUEST_BODY - info->data_len) {
                 info->body_too_large = 1;
@@ -578,10 +1064,16 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
         if (!json) return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid JSON object");
 
         int ret;
-        if (strcmp(url, "/shorten") == 0) {
+        if (strcasecmp(method, "POST") == 0 && strcmp(url, "/shorten") == 0) {
             ret = handle_shorten(connection, client_ip, json);
-        } else if (strncmp(url, "/unlock/", 8) == 0) {
+        } else if (strcasecmp(method, "POST") == 0 && strncmp(url, "/unlock/", 8) == 0) {
             ret = handle_unlock(connection, client_ip, url, json);
+        } else if (strcasecmp(method, "POST") == 0 && strcmp(url, "/api/admin/tokens") == 0) {
+            ret = handle_admin_create_token(connection, client_ip, json);
+        } else if (strcasecmp(method, "POST") == 0 && strcmp(url, "/api/admin/cleanup") == 0) {
+            ret = handle_admin_cleanup(connection, client_ip);
+        } else if (strncmp(url, "/api/admin/links/", 17) == 0) {
+            ret = handle_admin_update_link(connection, client_ip, url + 17, json);
         } else {
             ret = send_error(connection, MHD_HTTP_NOT_FOUND, "Endpoint not found");
         }
@@ -589,7 +1081,7 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
         return ret;
     }
 
-    if (strcasecmp(method, "GET") == 0) {
+    if (strcasecmp(method, "GET") == 0 || strcasecmp(method, "HEAD") == 0) {
         return handle_get(connection, url, client_ip);
     }
 
@@ -612,7 +1104,10 @@ void request_completed(void *cls, struct MHD_Connection *connection,
 
     struct connection_info_struct *info = *con_cls;
     if (!info) return;
-    free(info->data);
+    if (info->data) {
+        OPENSSL_cleanse(info->data, info->data_len);
+        free(info->data);
+    }
     free(info);
     *con_cls = NULL;
 }

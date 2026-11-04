@@ -2,38 +2,67 @@
 #define STATS_HTML_H
 
 #define STATS_HTML \
-"<!DOCTYPE html>\n" \
+"<!doctype html>\n" \
 "<html lang=\"en\">\n" \
 "<head>\n" \
-"    <meta charset=\"UTF-8\">\n" \
-"    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n" \
-"    <title>Link Analytics</title>\n" \
-"    <style>\n" \
-"        :root { --bg: #0f172a; --surface: #1e293b; --text: #f8fafc; --primary: #3b82f6; --border: #334155; }\n" \
-"        * { box-sizing: border-box; margin: 0; padding: 0; }\n" \
-"        body { font-family: sans-serif; background: var(--bg); color: var(--text); display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }\n" \
-"        .container { background: var(--surface); padding: 2rem; border-radius: 12px; width: 100%%; max-width: 450px; border: 1px solid var(--border); text-align: center; }\n" \
-"        h1 { margin-bottom: 1.5rem; font-size: 1.5rem; font-weight: 600; }\n" \
-"        .stat-box { background: var(--bg); border: 1px solid var(--border); padding: 1.5rem; border-radius: 8px; margin-bottom: 1rem; }\n" \
-"        .stat-value { font-size: 2.5rem; font-weight: bold; color: var(--primary); margin-bottom: 0.5rem; }\n" \
-"        .stat-label { color: #94a3b8; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em; }\n" \
-"        a { color: var(--primary); text-decoration: none; margin-top: 1rem; display: inline-block; }\n" \
-"        a:hover { text-decoration: underline; }\n" \
-"    </style>\n" \
+"  <meta charset=\"utf-8\">\n" \
+"  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n" \
+"  <meta name=\"robots\" content=\"noindex,nofollow\">\n" \
+"  <link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.svg\">\n" \
+"  <link rel=\"stylesheet\" href=\"/assets/styles.css\">\n" \
+"  <title>Analytics for /%s - c.micutu.com</title>\n" \
 "</head>\n" \
 "<body>\n" \
-"    <div class=\"container\">\n" \
-"        <h1>Analytics for /%s</h1>\n" \
+"  <header class=\"navbar\">\n" \
+"    <a class=\"brand\" href=\"/\"><img src=\"/favicon.svg\" alt=\"Logo\"><span>c.micutu.com</span><span class=\"brand-badge\">ANALYTICS</span></a>\n" \
+"    <nav class=\"nav-links\">\n" \
+"      <a class=\"btn btn-sm\" href=\"/inspect/%s\">Inspect Link</a>\n" \
+"      <a class=\"btn btn-sm\" href=\"/qr/%s.svg\" target=\"_blank\">QR SVG</a>\n" \
+"    </nav>\n" \
+"  </header>\n" \
+"  <main class=\"narrow\">\n" \
+"    <section class=\"container\">\n" \
+"      <div class=\"result-grid\">\n" \
+"        <div>\n" \
+"          <h1>Analytics for /%s</h1>\n" \
+"          <p class=\"subtitle\">Privacy-preserving aggregate metrics (HMAC visitor identifiers)</p>\n" \
+"          <div id=\"statsMeta\" hidden></div>\n" \
+"        </div>\n" \
+"        <div class=\"qr-preview\">\n" \
+"          <img src=\"/qr/%s.svg\" alt=\"QR Code\">\n" \
+"        </div>\n" \
+"      </div>\n" \
+"      <div class=\"stat-grid\">\n" \
 "        <div class=\"stat-box\">\n" \
-"            <div class=\"stat-value\">%d</div>\n" \
-"            <div class=\"stat-label\">Total Visits</div>\n" \
+"          <div class=\"stat-value\">%d</div>\n" \
+"          <div class=\"stat-label\">Total Visits</div>\n" \
 "        </div>\n" \
 "        <div class=\"stat-box\">\n" \
-"            <div class=\"stat-value\">%d</div>\n" \
-"            <div class=\"stat-label\">Unique Visitors</div>\n" \
+"          <div class=\"stat-value\">%d</div>\n" \
+"          <div class=\"stat-label\">Unique Visitors</div>\n" \
 "        </div>\n" \
-"        <a href=\"/\">&larr; Back to Shortener</a>\n" \
-"    </div>\n" \
+"      </div>\n" \
+"      <div class=\"row\">\n" \
+"        <div class=\"panel\">\n" \
+"          <h2>Device Categories</h2>\n" \
+"          <div id=\"deviceList\"><p class=\"hint\">No device data yet.</p></div>\n" \
+"        </div>\n" \
+"        <div class=\"panel\">\n" \
+"          <h2>Top Referrer Hosts</h2>\n" \
+"          <div id=\"referrerList\"><p class=\"hint\">No referrer data yet.</p></div>\n" \
+"        </div>\n" \
+"      </div>\n" \
+"      <div class=\"panel\">\n" \
+"        <h2>Daily Activity (Last 14 Days)</h2>\n" \
+"        <div id=\"dailyList\"><p class=\"hint\">No recent daily visits recorded.</p></div>\n" \
+"      </div>\n" \
+"      <div class=\"actions\">\n" \
+"        <a class=\"btn\" href=\"/\">&larr; Back to Shortener</a>\n" \
+"        <a class=\"btn\" href=\"/api/stats/%s\" target=\"_blank\">View Raw JSON</a>\n" \
+"      </div>\n" \
+"    </section>\n" \
+"  </main>\n" \
+"  <script src=\"/assets/stats.js\" defer></script>\n" \
 "</body>\n" \
 "</html>"
 
