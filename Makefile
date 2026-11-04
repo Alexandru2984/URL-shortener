@@ -19,6 +19,7 @@ TARGET := $(BIN_DIR)/shortener
 
 TEST_UTILS := $(BUILD_DIR)/test_utils
 TEST_DB := $(BUILD_DIR)/test_db
+TEST_HTTP := $(BUILD_DIR)/test_http
 SANITIZE_TARGET := $(BIN_DIR)/shortener-asan
 
 .PHONY: all clean run test check sanitize
@@ -40,9 +41,13 @@ $(TEST_UTILS): $(TEST_DIR)/test_utils.c $(SRC_DIR)/utils.c $(SRC_DIR)/utils.h $(
 $(TEST_DB): $(TEST_DIR)/test_db.c $(SRC_DIR)/db.c $(SRC_DIR)/db.h $(SRC_DIR)/utils.c $(SRC_DIR)/utils.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $(TEST_DIR)/test_db.c $(SRC_DIR)/db.c $(SRC_DIR)/utils.c $(LDLIBS)
 
-test: $(TEST_UTILS) $(TEST_DB)
+$(TEST_HTTP): $(TEST_DIR)/test_http.c $(SRC_DIR)/handlers.c $(SRC_DIR)/db.c $(SRC_DIR)/utils.c $(SRC_DIR)/qr.c $(SRC_DIR)/assets.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $(TEST_DIR)/test_http.c $(SRC_DIR)/handlers.c $(SRC_DIR)/db.c $(SRC_DIR)/utils.c $(SRC_DIR)/qr.c $(LDLIBS)
+
+test: $(TEST_UTILS) $(TEST_DB) $(TEST_HTTP)
 	$(TEST_UTILS)
 	$(TEST_DB)
+	$(TEST_HTTP)
 
 check: test
 	cppcheck --enable=warning,style,performance,portability --std=c11 --suppress=missingIncludeSystem --check-level=exhaustive $(SRC_DIR)
@@ -57,7 +62,7 @@ run: $(TARGET)
 	./$(TARGET)
 
 clean:
-	rm -f $(SRC_DIR)/*.o $(SRC_DIR)/*.d $(TARGET) $(SANITIZE_TARGET) $(TEST_UTILS) $(TEST_DB)
+	rm -f $(SRC_DIR)/*.o $(SRC_DIR)/*.d $(TARGET) $(SANITIZE_TARGET) $(TEST_UTILS) $(TEST_DB) $(TEST_HTTP)
 	rmdir $(BUILD_DIR) 2>/dev/null || true
 
 -include $(DEPS)
