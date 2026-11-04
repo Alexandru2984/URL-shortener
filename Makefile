@@ -16,6 +16,7 @@ SRCS := $(wildcard $(SRC_DIR)/*.c)
 OBJS := $(SRCS:.c=.o)
 DEPS := $(OBJS:.o=.d)
 TARGET := $(BIN_DIR)/shortener
+CLI_TARGET := $(BIN_DIR)/shortener-cli
 
 TEST_UTILS := $(BUILD_DIR)/test_utils
 TEST_DB := $(BUILD_DIR)/test_db
@@ -24,10 +25,13 @@ SANITIZE_TARGET := $(BIN_DIR)/shortener-asan
 
 .PHONY: all clean run test check sanitize
 
-all: $(TARGET)
+all: $(TARGET) $(CLI_TARGET)
 
 $(TARGET): $(OBJS) | $(BIN_DIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(CLI_TARGET): tools/shortener_cli.c | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $< -lcjson
 
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
@@ -50,7 +54,7 @@ test: $(TEST_UTILS) $(TEST_DB) $(TEST_HTTP)
 	$(TEST_HTTP)
 
 check: test
-	cppcheck --enable=warning,style,performance,portability --std=c11 --suppress=missingIncludeSystem --check-level=exhaustive $(SRC_DIR)
+	cppcheck --enable=warning,style,performance,portability --std=c11 --suppress=missingIncludeSystem --check-level=exhaustive $(SRC_DIR) tools
 
 $(SANITIZE_TARGET): $(SRCS) | $(BIN_DIR)
 	$(CC) $(CPPFLAGS) -std=c17 -O1 -g3 -Wall -Wextra -Werror -fno-omit-frame-pointer \
@@ -62,7 +66,7 @@ run: $(TARGET)
 	./$(TARGET)
 
 clean:
-	rm -f $(SRC_DIR)/*.o $(SRC_DIR)/*.d $(TARGET) $(SANITIZE_TARGET) $(TEST_UTILS) $(TEST_DB) $(TEST_HTTP)
+	rm -f $(SRC_DIR)/*.o $(SRC_DIR)/*.d $(TARGET) $(CLI_TARGET) $(SANITIZE_TARGET) $(TEST_UTILS) $(TEST_DB) $(TEST_HTTP)
 	rmdir $(BUILD_DIR) 2>/dev/null || true
 
 -include $(DEPS)

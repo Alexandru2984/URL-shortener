@@ -216,7 +216,7 @@ int main(void) {
         // 6. Admin edit link to increase max_clicks and re-test redirect
         CHECK(send_http_request(
                   port, "PUT", "/api/admin/links/e2e-slug", admin_key,
-                  "{\"url\":\"https://example.test/landing-v2\",\"max_clicks\":5,\"ttl_hours\":-1,\"is_active\":true}",
+                  "{\"url\":\"https://example.test/landing-v2\",\"max_clicks\":5,\"ttl_hours\":-1,\"is_active\":true,\"tags\":\"ci,e2e\"}",
                   resp, sizeof(resp)) == 200);
         CHECK(send_http_request(port, "GET", "/e2e-slug", NULL, NULL, resp, sizeof(resp)) == 302);
         CHECK(strstr(resp, "Location: https://example.test/landing-v2") != NULL);
@@ -228,6 +228,27 @@ int main(void) {
         CHECK(strstr(resp, "\"e2e-slug\"") != NULL);
         CHECK(send_http_request(port, "GET", "/api/admin/audit", admin_key, NULL, resp, sizeof(resp)) == 200);
         CHECK(strstr(resp, "link.create") != NULL);
+
+        // 8. Social Preview Card (/p/<slug>), Link-in-Bio Hub (/bio/<tag>), Bulk Shorten, Metrics & System Diagnostics
+        CHECK(send_http_request(port, "GET", "/p/e2e-slug", NULL, NULL, resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "property=\"og:title\"") != NULL);
+        CHECK(send_http_request(port, "GET", "/bio/e2e", NULL, NULL, resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "/e2e-slug") != NULL);
+        CHECK(send_http_request(port, "GET", "/api/bio/e2e", NULL, NULL, resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "\"profile\":\"e2e\"") != NULL);
+
+        CHECK(send_http_request(
+                  port, "POST", "/api/bulk/shorten", creator_token,
+                  "{\"links\":[{\"url\":\"https://example.test/b1\",\"custom_slug\":\"bulk-1\",\"tags\":\"batch\"},{\"url\":\"https://example.test/b2\",\"custom_slug\":\"bulk-2\",\"tags\":\"batch\"}]}",
+                  resp, sizeof(resp)) == 201);
+        CHECK(strstr(resp, "\"created\":2") != NULL);
+
+        CHECK(send_http_request(port, "GET", "/metrics", NULL, NULL, resp, sizeof(resp)) == 401);
+        CHECK(send_http_request(port, "GET", "/metrics", admin_key, NULL, resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "shortener_links_total") != NULL);
+        CHECK(send_http_request(port, "GET", "/api/admin/system", admin_key, NULL, resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "\"sqlite_version\"") != NULL);
+
         CHECK(send_http_request(port, "DELETE", "/e2e-slug", admin_key, NULL, resp, sizeof(resp)) == 200);
         CHECK(send_http_request(port, "GET", "/e2e-slug", NULL, NULL, resp, sizeof(resp)) == 404);
 

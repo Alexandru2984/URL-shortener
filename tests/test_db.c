@@ -113,15 +113,54 @@ int main(void) {
     CHECK(total == 2 && unique == 1);
 
     // Test 1-click self-destruct link (max_clicks = 1) and scheduled link
-    struct link_options burn_opts = { 0, 1, 0, NULL, "One-time secret", "burn,security" };
+    struct link_options burn_opts = { 0, 1, 0, NULL, "One-time secret", "burn,security", NULL, NULL };
     CHECK(insert_link_ex("burn-once", "https://example.test/secret-doc", &burn_opts) == 0);
     CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == 0);
     CHECK(record_visit_ex("burn-once", "203.0.113.5", "desktop", "direct") == 0);
     CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == -3);
 
-    struct link_options sched_opts = { 0, 0, 24, NULL, "Future launch", "launch" };
+    struct link_options sched_opts = { 0, 0, 24, NULL, "Future launch", "launch", NULL, NULL };
     CHECK(insert_link_ex("future-link", "https://example.test/launch", &sched_opts) == 0);
     CHECK(get_link("future-link", target, sizeof(target), &requires_password) == -5);
+
+    // Test smart device routing (mobile_url) & idempotency key lookup
+    struct link_options smart_opts = {
+        0, 0, 0, NULL, "Smart App Link", "launch,mobile",
+        "https://m.example.test/app", "idem-key-2026-001"
+    };
+    CHECK(insert_link_ex("smart-app", "https://example.test/desktop", &smart_opts) == 0);
+    char idem_slug[64];
+    CHECK(find_slug_by_idempotency_key("idem-key-2026-001", idem_slug, sizeof(idem_slug)) == 0);
+    CHECK(strcmp(idem_slug, "smart-app") == 0);
+    CHECK(find_slug_by_idempotency_key("non-existent-idem", idem_slug, sizeof(idem_slug)) == -1);
+    CHECK(get_link_for_device("smart-app", "desktop", target, sizeof(target), &requires_password) == 0);
+    CHECK(strcmp(target, "https://example.test/desktop") == 0);
+    CHECK(get_link_for_device("smart-app", "mobile", target, sizeof(target), &requires_password) == 0);
+    CHECK(strcmp(target, "https://m.example.test/app") == 0);
+
+    // Test Link-in-Bio collection JSON, Prometheus metrics, and System diagnostics JSON
+    char *bio_json = get_bio_collection_json("mobile");
+    CHECK(bio_json != NULL);
+    if (bio_json) {
+        CHECK(strstr(bio_json, "smart-app") != NULL);
+        free(bio_json);
+    }
+
+    char *prom = get_prometheus_metrics(120L);
+    CHECK(prom != NULL);
+    if (prom) {
+        CHECK(strstr(prom, "shortener_links_total") != NULL);
+        CHECK(strstr(prom, "shortener_uptime_seconds") != NULL);
+        free(prom);
+    }
+
+    char *sys_json = get_system_diagnostics_json(120L);
+    CHECK(sys_json != NULL);
+    if (sys_json) {
+        CHECK(strstr(sys_json, "\"sqlite_version\"") != NULL);
+        CHECK(strstr(sys_json, "\"hardening\"") != NULL);
+        free(sys_json);
+    }
 
     // Test link editing & disable/enable toggle
     CHECK(update_link("burn-once", "https://example.test/updated-doc", "Updated title",

@@ -59,6 +59,20 @@ int main(void) {
     CHECK(!is_valid_tag_list("work,,promo", 128U));
     CHECK(!is_valid_tag_list("bad<tag>", 128U));
 
+    // Idempotency key & UTM parameter appending
+    CHECK(is_valid_idempotency_key("release_2026-v1.0:prod", 64U));
+    CHECK(!is_valid_idempotency_key("bad key with spaces", 64U));
+    CHECK(!is_valid_idempotency_key("", 64U));
+
+    char utm_url[512];
+    CHECK(append_utm_params("https://example.test/landing", "newsletter", "email", "q4_launch",
+                            utm_url, sizeof(utm_url)) == 0);
+    CHECK(strcmp(utm_url, "https://example.test/landing?utm_source=newsletter&utm_medium=email&utm_campaign=q4_launch") == 0);
+
+    CHECK(append_utm_params("https://example.test/landing?ref=1#top", "cli", NULL, "v2",
+                            utm_url, sizeof(utm_url)) == 0);
+    CHECK(strcmp(utm_url, "https://example.test/landing?ref=1&utm_source=cli&utm_campaign=v2#top") == 0);
+
     // Scoped API token generation & SHA-256 hashing
     char token[64];
     char prefix[16];
