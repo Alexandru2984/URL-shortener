@@ -30,9 +30,69 @@ int main(void) {
     CHECK(is_valid_http_url("HTTP://example.test", 2048U));
     CHECK(!is_valid_http_url("ftp://example.test", 2048U));
     CHECK(!is_valid_http_url("https://", 2048U));
+    CHECK(!is_valid_http_url("https://:8080/path", 2048U));
+    CHECK(!is_valid_http_url("https://example.test:99999/path", 2048U));
     CHECK(!is_valid_http_url("https://user@example.test", 2048U));
     CHECK(!is_valid_http_url("https://example.test/\r\nX-Test: injected", 2048U));
     CHECK(!is_valid_http_url("https://example.test/\"<script>", 2048U));
+
+    // SSRF, Private IP, Metadata, and Redirect Loop protection
+    CHECK(is_safe_redirect_url("https://example.test/docs", "https://c.micutu.com", 2048U));
+    CHECK(is_safe_redirect_url("https://1.1.1.1/dns", "https://c.micutu.com", 2048U));
+    CHECK(!is_safe_redirect_url("https://c.micutu.com/loop", "https://c.micutu.com", 2048U));
+    CHECK(!is_safe_redirect_url("http://127.0.0.1:8086/admin", "https://c.micutu.com", 2048U));
+    CHECK(!is_safe_redirect_url("http://localhost/admin", "https://c.micutu.com", 2048U));
+    CHECK(!is_safe_redirect_url("http://sub.localhost/admin", "https://c.micutu.com", 2048U));
+    CHECK(!is_safe_redirect_url("http://169.254.169.254/latest/meta-data/", "https://c.micutu.com", 2048U));
+    CHECK(!is_safe_redirect_url("http://10.0.0.1/secret", "https://c.micutu.com", 2048U));
+    CHECK(!is_safe_redirect_url("http://192.168.1.1/router", "https://c.micutu.com", 2048U));
+    CHECK(!is_safe_redirect_url("http://172.16.5.4/internal", "https://c.micutu.com", 2048U));
+    CHECK(!is_safe_redirect_url("http://[::1]:8080/", "https://c.micutu.com", 2048U));
+    CHECK(!is_safe_redirect_url("http://[::ffff:127.0.0.1]/", "https://c.micutu.com", 2048U));
+    CHECK(!is_safe_redirect_url("http://2130706433/", "https://c.micutu.com", 2048U));
+    CHECK(!is_safe_redirect_url("http://intranet/login", "https://c.micutu.com", 2048U));
+
+    // Tag validation
+    CHECK(is_valid_tag_list("work,promo,2026-q4", 128U));
+    CHECK(!is_valid_tag_list("work,,promo", 128U));
+    CHECK(!is_valid_tag_list("bad<tag>", 128U));
+
+    // Scoped API token generation & SHA-256 hashing
+    char token[64];
+    char prefix[16];
+    char token_hash[65];
+    CHECK(generate_api_token(token, sizeof(token), prefix, sizeof(prefix)) == 0);
+    CHECK(strncmp(token, "csh_", 4U) == 0);
+    CHECK(strlen(token) == 40U);
+    CHECK(strlen(prefix) == 8U);
+    CHECK(hash_api_token(token, token_hash, sizeof(token_hash)) == 0);
+    CHECK(strlen(token_hash) == 64U);
+
+    // Privacy-preserving classifiers
+    char device[16];
+    classify_user_agent("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)", device, sizeof(device));
+    CHECK(strcmp(device, "mobile") == 0);
+    classify_user_agent("curl/8.5.0", device, sizeof(device));
+    CHECK(strcmp(device, "cli") == 0);
+    classify_user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0", device, sizeof(device));
+    CHECK(strcmp(device, "desktop") == 0);
+
+    char domain[64];
+    classify_referrer("https://www.github.com/user/repo?token=secret", "https://c.micutu.com", domain, sizeof(domain));
+    CHECK(strcmp(domain, "github.com") == 0);
+    classify_referrer("https://c.micutu.com/admin", "https://c.micutu.com", domain, sizeof(domain));
+    CHECK(strcmp(domain, "self") == 0);
+    classify_referrer(NULL, "https://c.micutu.com", domain, sizeof(domain));
+    CHECK(strcmp(domain, "direct") == 0);
+
+    // CSV formula injection & HTML escaping
+    char csv_out[128];
+    sanitize_csv_field("=cmd|' /C calc'!A0", csv_out, sizeof(csv_out));
+    CHECK(strcmp(csv_out, "\"'=cmd|' /C calc'!A0\"") == 0);
+
+    char html_out[128];
+    html_escape("<script>alert(\"xss\")</script>", html_out, sizeof(html_out));
+    CHECK(strcmp(html_out, "&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;") == 0);
 
     char password_hash[128];
     CHECK(hash_password("correct horse battery staple", password_hash, sizeof(password_hash)) == 0);

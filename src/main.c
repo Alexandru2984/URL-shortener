@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <limits.h>
+#include <openssl/crypto.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
@@ -33,6 +34,11 @@ static volatile sig_atomic_t running = 1;
 static char api_key_from_file[MAX_API_KEY_LEN + 1U];
 static char analytics_key_from_file[MAX_API_KEY_LEN + 1U];
 
+static void scrub_secrets(void) {
+    OPENSSL_cleanse(api_key_from_file, sizeof(api_key_from_file));
+    OPENSSL_cleanse(analytics_key_from_file, sizeof(analytics_key_from_file));
+}
+
 static int load_secret_from_file(const char *path, char *secret_out, size_t secret_out_len,
                                  const char *label) {
     if (!path || !path[0]) return -1;
@@ -54,6 +60,7 @@ static int load_secret_from_file(const char *path, char *secret_out, size_t secr
     ssize_t bytes_read = read(fd, secret_out, secret_out_len - 1U);
     close(fd);
     if (bytes_read <= 0 || (size_t)bytes_read == secret_out_len - 1U) {
+        OPENSSL_cleanse(secret_out, secret_out_len);
         fprintf(stderr, "Invalid %s file\n", label);
         return -1;
     }
@@ -64,12 +71,14 @@ static int load_secret_from_file(const char *path, char *secret_out, size_t secr
         length--;
     }
     if (length == 0) {
+        OPENSSL_cleanse(secret_out, secret_out_len);
         fprintf(stderr, "%s file is empty\n", label);
         return -1;
     }
     for (size_t i = 0; i < length; i++) {
         unsigned char c = (unsigned char)secret_out[i];
         if (c < 0x21U || c > 0x7eU) {
+            OPENSSL_cleanse(secret_out, secret_out_len);
             fprintf(stderr, "%s file contains invalid characters\n", label);
             return -1;
         }
@@ -163,7 +172,6 @@ int main(void) {
     uint16_t port = DEFAULT_PORT;
     if (port_env && parse_port(port_env, &port) != 0) {
         fprintf(stderr, "Invalid PORT value\n");
-        close_db();
         return 1;
     }
 
@@ -176,18 +184,19 @@ int main(void) {
     listen_address.sin_port = htons(port);
     if (inet_pton(AF_INET, bind_address, &listen_address.sin_addr) != 1) {
         fprintf(stderr, "Invalid IPv4 BIND_ADDRESS\n");
-        close_db();
         return 1;
     }
 
     if (configure_secret("API_KEY", "API_KEY_FILE", api_key_from_file,
                          sizeof(api_key_from_file), "API key", &g_api_key) != 0) {
+        scrub_secrets();
         return 1;
     }
     const char *analytics_key = NULL;
     if (configure_secret("ANALYTICS_HMAC_KEY", "ANALYTICS_HMAC_KEY_FILE",
                          analytics_key_from_file, sizeof(analytics_key_from_file),
                          "analytics HMAC key", &analytics_key) != 0) {
+        scrub_secrets();
         return 1;
     }
     const char *base_url_env = getenv("BASE_URL");
@@ -196,7 +205,7 @@ int main(void) {
         if (base_url_len > MAX_BASE_URL_LEN || base_url_env[base_url_len - 1U] == '/' ||
             !is_valid_http_url(base_url_env, MAX_BASE_URL_LEN)) {
             fprintf(stderr, "Invalid BASE_URL value\n");
-            close_db();
+            scrub_secrets();
             return 1;
         }
         g_base_url = base_url_env;
@@ -204,6 +213,7 @@ int main(void) {
 
     if (init_db("data/shortener.db", analytics_key) != 0) {
         fprintf(stderr, "Failed to initialize database.\n");
+        scrub_secrets();
         return 1;
     }
 
@@ -231,6 +241,7 @@ int main(void) {
     if (sigaction(SIGTERM, &sa, NULL) != 0 || sigaction(SIGINT, &sa, NULL) != 0) {
         log_error("Failed to register signal handlers");
         close_db();
+        scrub_secrets();
         return 1;
     }
 
@@ -249,6 +260,7 @@ int main(void) {
     if (NULL == daemon) {
         log_error("Failed to start daemon on %s:%u", bind_address, (unsigned int)port);
         close_db();
+        scrub_secrets();
         return 1;
     }
 
@@ -271,6 +283,7 @@ int main(void) {
     MHD_stop_daemon(daemon);
     if (cleanup_started) pthread_join(cleanup_tid, NULL);
     close_db();
+    scrub_secrets();
     log_message("Server stopped.");
     return 0;
 }
