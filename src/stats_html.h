@@ -42,7 +42,7 @@
 "          <div class=\"stat-label\">Unique Visitors</div>\n" \
 "        </div>\n" \
 "      </div>\n" \
-"      <div class=\"row\">\n" \
+"      <div class=\"row-3\">\n" \
 "        <div class=\"panel\">\n" \
 "          <h2>Device Categories</h2>\n" \
 "          <div id=\"deviceList\"><p class=\"hint\">No device data yet.</p></div>\n" \
@@ -50,6 +50,10 @@
 "        <div class=\"panel\">\n" \
 "          <h2>Top Referrer Hosts</h2>\n" \
 "          <div id=\"referrerList\"><p class=\"hint\">No referrer data yet.</p></div>\n" \
+"        </div>\n" \
+"        <div class=\"panel\">\n" \
+"          <h2>Top Countries</h2>\n" \
+"          <div id=\"countryList\"><p class=\"hint\">No geo data yet.</p></div>\n" \
 "        </div>\n" \
 "      </div>\n" \
 "      <div class=\"panel\">\n" \

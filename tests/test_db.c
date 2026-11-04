@@ -113,34 +113,36 @@ int main(void) {
     CHECK(total == 2 && unique == 1);
 
     // Test 1-click self-destruct link (max_clicks = 1) and scheduled link
-    struct link_options burn_opts = { 0, 1, 0, NULL, "One-time secret", "burn,security", NULL, NULL, NULL, 0 };
+    struct link_options burn_opts = { 0, 1, 0, NULL, "One-time secret", "burn,security", NULL, NULL, NULL, 0, 302 };
     CHECK(insert_link_ex("burn-once", "https://example.test/secret-doc", &burn_opts) == 0);
     CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == 0);
-    CHECK(record_visit_ex("burn-once", "203.0.113.5", "desktop", "direct") == 0);
+    CHECK(record_visit_geo("burn-once", "203.0.113.5", "desktop", "direct", "RO") == 0);
     CHECK(get_link("burn-once", target, sizeof(target), &requires_password) == -3);
 
-    struct link_options sched_opts = { 0, 0, 24, NULL, "Future launch", "launch", NULL, NULL, NULL, 0 };
+    struct link_options sched_opts = { 0, 0, 24, NULL, "Future launch", "launch", NULL, NULL, NULL, 0, 302 };
     CHECK(insert_link_ex("future-link", "https://example.test/launch", &sched_opts) == 0);
     CHECK(get_link("future-link", target, sizeof(target), &requires_password) == -5);
 
-    // Test smart device routing (mobile_url), A/B split testing & idempotency key lookup
+    // Test smart device routing (mobile_url), A/B split testing, custom redirect_code & idempotency key lookup
     struct link_options smart_opts = {
         0, 0, 0, NULL, "Smart App Link", "launch,mobile",
         "https://m.example.test/app", "idem-key-2026-001",
-        "https://example.test/variant-b", 50
+        "https://example.test/variant-b", 50, 308
     };
     CHECK(insert_link_ex("smart-app", "https://example.test/desktop", &smart_opts) == 0);
     char idem_slug[64];
     CHECK(find_slug_by_idempotency_key("idem-key-2026-001", idem_slug, sizeof(idem_slug)) == 0);
     CHECK(strcmp(idem_slug, "smart-app") == 0);
     CHECK(find_slug_by_idempotency_key("non-existent-idem", idem_slug, sizeof(idem_slug)) == -1);
-    CHECK(get_link_for_device("smart-app", "desktop", target, sizeof(target), &requires_password) == 0);
+    int redir_code = 0;
+    CHECK(get_link_for_device_ex("smart-app", "desktop", target, sizeof(target), &requires_password, &redir_code) == 0);
+    CHECK(redir_code == 308);
     CHECK(strcmp(target, "https://example.test/desktop") == 0 ||
           strcmp(target, "https://example.test/variant-b") == 0);
     CHECK(get_link_for_device("smart-app", "mobile", target, sizeof(target), &requires_password) == 0);
     CHECK(strcmp(target, "https://m.example.test/app") == 0);
 
-    // Test bulk admin action & JSON snapshot backup
+    // Test bulk admin action, JSON snapshot backup & JSON snapshot restore
     const char *bulk_slugs[1] = { "smart-app" };
     CHECK(bulk_admin_action("disable", bulk_slugs, 1) == 1);
     CHECK(get_link("smart-app", target, sizeof(target), &requires_password) == -6);
@@ -153,6 +155,12 @@ int main(void) {
         CHECK(strstr(backup_json, "\"c.micutu.com-snapshot-v1\"") != NULL);
         free(backup_json);
     }
+
+    cJSON *restore_doc = cJSON_Parse("{\"links\":[{\"slug\":\"restored-1\",\"url\":\"https://example.test/restored\",\"tags\":\"backup\"}]}");
+    int restored_cnt = 0, skipped_cnt = 0;
+    CHECK(import_links_backup_json(restore_doc, "https://c.micutu.com", &restored_cnt, &skipped_cnt) == 0);
+    CHECK(restored_cnt == 1 && skipped_cnt == 0);
+    cJSON_Delete(restore_doc);
 
     // Test Link-in-Bio collection JSON, Prometheus metrics, and System diagnostics JSON
     char *bio_json = get_bio_collection_json("mobile");

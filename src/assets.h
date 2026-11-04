@@ -678,6 +678,7 @@
 "      const mobileUrl = byId('mobileUrl') ? byId('mobileUrl').value.trim() : '';\n" \
 "      const altUrl = byId('altUrl') ? byId('altUrl').value.trim() : '';\n" \
 "      const altWeight = byId('altWeight') ? Number(byId('altWeight').value || 0) : 0;\n" \
+"      const redirectCode = byId('redirectCode') ? Number(byId('redirectCode').value || 302) : 302;\n" \
 "      const utmSource = byId('utmSource') ? byId('utmSource').value.trim() : '';\n" \
 "      const utmMedium = byId('utmMedium') ? byId('utmMedium').value.trim() : '';\n" \
 "      const utmCampaign = byId('utmCampaign') ? byId('utmCampaign').value.trim() : '';\n" \
@@ -704,6 +705,7 @@
 "      if (tags) payload.tags = tags;\n" \
 "      if (mobileUrl) payload.mobile_url = mobileUrl;\n" \
 "      if (altUrl && altWeight > 0) { payload.alt_url = altUrl; payload.alt_weight = altWeight; }\n" \
+"      if (redirectCode !== 302) payload.redirect_code = redirectCode;\n" \
 "      if (utmSource) payload.utm_source = utmSource;\n" \
 "      if (utmMedium) payload.utm_medium = utmMedium;\n" \
 "      if (utmCampaign) payload.utm_campaign = utmCampaign;\n" \
@@ -984,6 +986,17 @@
 "          const s2 = document.createElement('strong'); s2.textContent = String(ref.visits);\n" \
 "          r.append(s1, s2);\n" \
 "          refBox.append(r);\n" \
+"        }\n" \
+"      }\n" \
+"      const ccBox = byId('countryList');\n" \
+"      if (ccBox && Array.isArray(data.countries) && data.countries.length) {\n" \
+"        ccBox.replaceChildren();\n" \
+"        for (const c of data.countries) {\n" \
+"          const r = document.createElement('div'); r.className = 'list-row';\n" \
+"          const s1 = document.createElement('span'); s1.textContent = c.country;\n" \
+"          const s2 = document.createElement('strong'); s2.textContent = String(c.visits);\n" \
+"          r.append(s1, s2);\n" \
+"          ccBox.append(r);\n" \
 "        }\n" \
 "      }\n" \
 "      const hourBox = byId('hourlyList');\n" \
@@ -1385,6 +1398,33 @@
 "        URL.revokeObjectURL(url);\n" \
 "      } catch (e) {\n" \
 "        setStatus(dashboardStatus, 'JSON backup export failed.');\n" \
+"      }\n" \
+"    });\n" \
+"  }\n" \
+"\n" \
+"  if (byId('importJsonBtn') && byId('importJsonFile')) {\n" \
+"    byId('importJsonBtn').addEventListener('click', () => byId('importJsonFile').click());\n" \
+"    byId('importJsonFile').addEventListener('change', async () => {\n" \
+"      const file = byId('importJsonFile').files && byId('importJsonFile').files[0];\n" \
+"      if (!file || !apiKey) return;\n" \
+"      try {\n" \
+"        const rawText = await file.text();\n" \
+"        const res = await fetch('/api/admin/restore', {\n" \
+"          method: 'POST',\n" \
+"          headers: headers(true),\n" \
+"          body: rawText\n" \
+"        });\n" \
+"        const data = await res.json();\n" \
+"        if (res.ok && data) {\n" \
+"          setStatus(dashboardStatus, 'Restored ' + count(data.restored) + ' link(s), skipped ' + count(data.skipped) + '.');\n" \
+"          loadLinks();\n" \
+"        } else {\n" \
+"          setStatus(dashboardStatus, (data && data.error) ? data.error : 'JSON restore failed.');\n" \
+"        }\n" \
+"      } catch (e) {\n" \
+"        setStatus(dashboardStatus, 'Could not restore JSON snapshot.');\n" \
+"      } finally {\n" \
+"        byId('importJsonFile').value = '';\n" \
 "      }\n" \
 "    });\n" \
 "  }\n" \

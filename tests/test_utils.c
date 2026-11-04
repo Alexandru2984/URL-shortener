@@ -101,6 +101,14 @@ int main(void) {
     classify_referrer(NULL, "https://c.micutu.com", domain, sizeof(domain));
     CHECK(strcmp(domain, "direct") == 0);
 
+    char cc[4];
+    sanitize_country_code("ro", cc, sizeof(cc));
+    CHECK(strcmp(cc, "RO") == 0);
+    sanitize_country_code("t1", cc, sizeof(cc));
+    CHECK(strcmp(cc, "T1") == 0);
+    sanitize_country_code("bad", cc, sizeof(cc));
+    CHECK(strcmp(cc, "XX") == 0);
+
     // CSV formula injection & HTML escaping
     char csv_out[128];
     sanitize_csv_field("=cmd|' /C calc'!A0", csv_out, sizeof(csv_out));

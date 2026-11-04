@@ -59,6 +59,8 @@
 "            <button id=\"refresh\" type=\"button\">Refresh</button>\n" \
 "            <button id=\"exportCsv\" type=\"button\">Export CSV</button>\n" \
 "            <button id=\"exportJson\" type=\"button\">Backup JSON</button>\n" \
+"            <button id=\"importJsonBtn\" type=\"button\">Restore JSON</button>\n" \
+"            <input id=\"importJsonFile\" type=\"file\" accept=\"application/json,.json\" hidden>\n" \
 "            <button id=\"cleanupBtn\" type=\"button\">Purge Expired</button>\n" \
 "            <button id=\"lock\" type=\"button\" class=\"danger\">Lock</button>\n" \
 "          </div>\n" \

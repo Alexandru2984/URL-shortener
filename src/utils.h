@@ -21,6 +21,7 @@ int append_utm_params(const char *url, const char *utm_source,
 void classify_user_agent(const char *user_agent, char *device_out, size_t device_out_len);
 void classify_referrer(const char *referer, const char *base_url,
                        char *domain_out, size_t domain_out_len);
+void sanitize_country_code(const char *raw_code, char *country_out, size_t country_out_len);
 void sanitize_csv_field(const char *input, char *output, size_t output_len);
 void html_escape(const char *input, char *output, size_t output_len);
 

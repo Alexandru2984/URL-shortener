@@ -286,13 +286,17 @@ static void record_request_visit(struct MHD_Connection *connection,
                                  const char *slug, const char *client_ip) {
     const char *ua = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "User-Agent");
     const char *ref = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "Referer");
+    const char *cc = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "CF-IPCountry");
+    if (!cc || !cc[0]) {
+        cc = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "X-Country-Code");
+    }
 
     char device[16];
     char ref_domain[128];
     classify_user_agent(ua, device, sizeof(device));
     classify_referrer(ref, g_base_url, ref_domain, sizeof(ref_domain));
 
-    if (record_visit_ex(slug, client_ip, device, ref_domain) != 0) {
+    if (record_visit_geo(slug, client_ip, device, ref_domain, cc) != 0) {
         log_error("Could not record visit for %s", slug);
     }
 }
@@ -477,6 +481,11 @@ static int handle_shorten(struct MHD_Connection *connection, const char *client_
     }
     if (get_optional_int_range(json, "alt_weight", 0, 99, 0, &opts.alt_weight) != 0) {
         return send_error(connection, MHD_HTTP_BAD_REQUEST, "alt_weight must be an integer between 0 and 99");
+    }
+    if (get_optional_int_range(json, "redirect_code", 301, 308, 302, &opts.redirect_code) != 0 ||
+        (opts.redirect_code != 301 && opts.redirect_code != 302 &&
+         opts.redirect_code != 307 && opts.redirect_code != 308)) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "redirect_code must be 301, 302, 307, or 308");
     }
 
     char slug[MAX_SLUG_LEN];
@@ -814,6 +823,27 @@ static int handle_admin_bulk_action(struct MHD_Connection *connection, const cha
     return send_json_response(connection, MHD_HTTP_OK, out);
 }
 
+static int handle_admin_restore(struct MHD_Connection *connection, const char *client_ip,
+                                const cJSON *json) {
+    if (!check_admin_api_key(connection)) {
+        return send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid or missing API key");
+    }
+    if (check_rate_limit(client_ip, ADMIN_RATE_LIMIT) != 0) {
+        return send_error(connection, MHD_HTTP_TOO_MANY_REQUESTS, "Rate limit exceeded");
+    }
+
+    int restored = 0;
+    int skipped = 0;
+    if (import_links_backup_json(json, g_base_url, &restored, &skipped) != 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid backup snapshot JSON");
+    }
+
+    char out[128];
+    snprintf(out, sizeof(out), "{\"status\":\"ok\",\"restored\":%d,\"skipped\":%d}", restored, skipped);
+    (void)record_audit_event("admin.restore_json", "admin", NULL, client_ip, out);
+    return send_json_response(connection, MHD_HTTP_OK, out);
+}
+
 static int handle_inspect_page(struct MHD_Connection *connection, const char *slug,
                                const char *client_ip) {
     if (!is_valid_slug(slug, MAX_SLUG_LENGTH)) {
@@ -1076,6 +1106,37 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
         return send_text_response(connection, MHD_HTTP_OK, MANIFEST_JSON, "application/manifest+json; charset=utf-8");
     }
 
+    if (strcmp(url, "/openapi.json") == 0) {
+        char *spec = malloc(2048U);
+        if (!spec) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Memory error");
+        snprintf(spec, 2048U,
+                 "{\n"
+                 "  \"openapi\": \"3.0.3\",\n"
+                 "  \"info\": {\n"
+                 "    \"title\": \"c.micutu.com C17 URL Shortener API\",\n"
+                 "    \"version\": \"2.0.0\",\n"
+                 "    \"description\": \"High-performance URL shortener, native SVG QR generator, A/B router, and privacy-first analytics engine in pure C17.\"\n"
+                 "  },\n"
+                 "  \"servers\": [{ \"url\": \"%s\" }],\n"
+                 "  \"paths\": {\n"
+                 "    \"/shorten\": { \"post\": { \"summary\": \"Create a short link\" } },\n"
+                 "    \"/api/bulk/shorten\": { \"post\": { \"summary\": \"Batch shorten up to 25 links\" } },\n"
+                 "    \"/qr/{slug}.svg\": { \"get\": { \"summary\": \"Generate themed SVG QR code in pure C\" } },\n"
+                 "    \"/api/inspect/{slug}\": { \"get\": { \"summary\": \"Inspect link safety and metadata\" } },\n"
+                 "    \"/api/stats/{slug}\": { \"get\": { \"summary\": \"Query privacy-preserving link analytics\" } },\n"
+                 "    \"/api/bio/{tag}\": { \"get\": { \"summary\": \"Query Link-in-Bio public collection\" } },\n"
+                 "    \"/api/admin/links\": { \"get\": { \"summary\": \"Query and filter links\" } },\n"
+                 "    \"/api/admin/bulk-action\": { \"post\": { \"summary\": \"Batch enable, disable, or delete links\" } },\n"
+                 "    \"/api/admin/backup.json\": { \"get\": { \"summary\": \"Export JSON snapshot backup\" } },\n"
+                 "    \"/api/admin/restore\": { \"post\": { \"summary\": \"Restore links from JSON snapshot\" } },\n"
+                 "    \"/metrics\": { \"get\": { \"summary\": \"Prometheus metrics exporter\" } },\n"
+                 "    \"/health\": { \"get\": { \"summary\": \"Service health check\" } }\n"
+                 "  }\n"
+                 "}\n",
+                 g_base_url);
+        return send_dynamic_buffer(connection, MHD_HTTP_OK, spec, "application/json; charset=utf-8", NULL);
+    }
+
     if (strcmp(url, "/robots.txt") == 0) {
         char *robots = malloc(512U);
         if (!robots) return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Memory error");
@@ -1327,10 +1388,12 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
 
     char target_url[MAX_URL_BUFFER];
     int requires_password = 0;
+    int redirect_code = MHD_HTTP_FOUND;
     const char *ua_header = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "User-Agent");
     char visitor_device[16];
     classify_user_agent(ua_header, visitor_device, sizeof(visitor_device));
-    int db_result = get_link_for_device(slug, visitor_device, target_url, sizeof(target_url), &requires_password);
+    int db_result = get_link_for_device_ex(slug, visitor_device, target_url, sizeof(target_url),
+                                           &requires_password, &redirect_code);
     if (db_result == -2 || db_result == -3) {
         return send_error_page(connection, MHD_HTTP_GONE, "Link Expired",
                                "This short link has expired or reached its maximum click limit.");
@@ -1362,7 +1425,7 @@ static int handle_get(struct MHD_Connection *connection, const char *url, const 
     if (!response) return MHD_NO;
     MHD_add_response_header(response, "Location", target_url);
     add_security_headers(response);
-    int ret = MHD_queue_response(connection, MHD_HTTP_FOUND, response);
+    int ret = MHD_queue_response(connection, (unsigned int)redirect_code, response);
     MHD_destroy_response(response);
     return ret;
 }
@@ -1463,6 +1526,8 @@ enum MHD_Result handle_request(void *cls, struct MHD_Connection *connection,
             ret = handle_admin_cleanup(connection, client_ip);
         } else if (strcasecmp(method, "POST") == 0 && strcmp(url, "/api/admin/bulk-action") == 0) {
             ret = handle_admin_bulk_action(connection, client_ip, json);
+        } else if (strcasecmp(method, "POST") == 0 && strcmp(url, "/api/admin/restore") == 0) {
+            ret = handle_admin_restore(connection, client_ip, json);
         } else if (strncmp(url, "/api/admin/links/", 17) == 0) {
             ret = handle_admin_update_link(connection, client_ip, url + 17, json);
         } else {

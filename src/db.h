@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <sqlite3.h>
+#include <cjson/cJSON.h>
 
 extern sqlite3 *db;
 
@@ -17,6 +18,7 @@ struct link_options {
     const char *idempotency_key;
     const char *alt_url;
     int alt_weight;
+    int redirect_code;
 };
 
 int init_db(const char *db_path, const char *analytics_hmac_key);
@@ -30,11 +32,17 @@ int find_slug_by_idempotency_key(const char *idempotency_key, char *slug_out, si
 int get_link(const char *slug, char *url_out, size_t url_out_len, int *requires_pwd);
 int get_link_for_device(const char *slug, const char *device_type,
                         char *url_out, size_t url_out_len, int *requires_pwd);
+int get_link_for_device_ex(const char *slug, const char *device_type,
+                           char *url_out, size_t url_out_len, int *requires_pwd,
+                           int *redirect_code_out);
 int get_link_with_password(const char *slug, const char *password, char *url_out, size_t url_out_len);
 
 int record_visit(const char *slug, const char *ip);
 int record_visit_ex(const char *slug, const char *ip,
                     const char *device_type, const char *referrer_domain);
+int record_visit_geo(const char *slug, const char *ip,
+                     const char *device_type, const char *referrer_domain,
+                     const char *country_code);
 
 int get_stats(const char *slug, int *total_visits, int *unique_visits);
 char *get_detailed_stats_json(const char *slug);
@@ -63,12 +71,14 @@ int record_audit_event(const char *event_type, const char *actor,
                        const char *target, const char *ip, const char *details);
 char *get_audit_logs_json(int limit);
 
-// Admin: query links as JSON string, backup JSON, or export as CSV (caller must free)
+// Admin: query links as JSON string, backup/restore JSON, or export as CSV (caller must free)
 char *get_all_links_json(void);
 char *query_admin_links_json(const char *search, const char *tag,
                              const char *status_filter, int limit, int offset);
 char *export_links_csv(void);
 char *export_links_backup_json(void);
+int import_links_backup_json(const cJSON *root, const char *base_url,
+                             int *restored_out, int *skipped_out);
 
 void close_db(void);
 

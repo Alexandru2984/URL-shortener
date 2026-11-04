@@ -160,10 +160,12 @@ int main(void) {
         CHECK(strstr(resp, "unsafe-inline") == NULL);
         CHECK(send_http_request(port, "HEAD", "/health", NULL, NULL, resp, sizeof(resp)) == 200);
 
-        // 2. Static assets & SEO routes
+        // 2. Static assets, OpenAPI 3.0 & SEO routes
         CHECK(send_http_request(port, "GET", "/assets/styles.css", NULL, NULL, resp, sizeof(resp)) == 200);
         CHECK(send_http_request(port, "GET", "/assets/index.js", NULL, NULL, resp, sizeof(resp)) == 200);
         CHECK(send_http_request(port, "GET", "/favicon.svg", NULL, NULL, resp, sizeof(resp)) == 200);
+        CHECK(send_http_request(port, "GET", "/openapi.json", NULL, NULL, resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "\"openapi\": \"3.0.3\"") != NULL);
         CHECK(send_http_request(port, "GET", "/sitemap.xml", NULL, NULL, resp, sizeof(resp)) == 200);
         CHECK(strstr(resp, "<loc>https://c.micutu.com/</loc>") != NULL);
         CHECK(send_http_request(port, "GET", "/robots.txt", NULL, NULL, resp, sizeof(resp)) == 200);
@@ -252,6 +254,12 @@ int main(void) {
         CHECK(strstr(resp, "\"sqlite_version\"") != NULL);
         CHECK(send_http_request(port, "GET", "/api/admin/backup.json", admin_key, NULL, resp, sizeof(resp)) == 200);
         CHECK(strstr(resp, "\"c.micutu.com-snapshot-v1\"") != NULL);
+        CHECK(send_http_request(
+                  port, "POST", "/api/admin/restore", admin_key,
+                  "{\"links\":[{\"slug\":\"restored-e2e\",\"url\":\"https://example.test/restored\"}]}",
+                  resp, sizeof(resp)) == 200);
+        CHECK(strstr(resp, "\"restored\":1") != NULL);
+        CHECK(send_http_request(port, "GET", "/restored-e2e", NULL, NULL, resp, sizeof(resp)) == 302);
         CHECK(send_http_request(
                   port, "POST", "/api/admin/bulk-action", admin_key,
                   "{\"action\":\"disable\",\"slugs\":[\"bulk-1\",\"bulk-2\"]}",

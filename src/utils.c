@@ -608,6 +608,25 @@ void html_escape(const char *input, char *output, size_t output_len) {
     output[out_idx] = '\0';
 }
 
+void sanitize_country_code(const char *raw_code, char *country_out, size_t country_out_len) {
+    if (!country_out || country_out_len < 3U) return;
+    if (!raw_code || strlen(raw_code) != 2U) {
+        snprintf(country_out, country_out_len, "%s", "XX");
+        return;
+    }
+    unsigned char c0 = (unsigned char)raw_code[0];
+    unsigned char c1 = (unsigned char)raw_code[1];
+    int valid_iso = isalpha(c0) && isalpha(c1);
+    int valid_tor = (toupper(c0) == 'T' && c1 == '1');
+    if (!valid_iso && !valid_tor) {
+        snprintf(country_out, country_out_len, "%s", "XX");
+        return;
+    }
+    country_out[0] = (char)toupper(c0);
+    country_out[1] = (char)toupper(c1);
+    country_out[2] = '\0';
+}
+
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void rotate_log_if_needed(const char *filename) {

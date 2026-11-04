@@ -77,9 +77,20 @@
 "              <div class=\"field\"><label for=\"tags\">Tags (comma-separated, creates /bio/tag)</label><input id=\"tags\" type=\"text\" autocomplete=\"off\" placeholder=\"work,launch\"></div>\n" \
 "              <div class=\"field\"><label for=\"password\">Link password</label><input id=\"password\" type=\"password\" autocomplete=\"new-password\" placeholder=\"Optional protection\"></div>\n" \
 "            </div>\n" \
-"            <div class=\"field\">\n" \
-"              <label for=\"mobileUrl\">Mobile Deep-Link / Smart Target URL (optional)</label>\n" \
-"              <input id=\"mobileUrl\" type=\"url\" autocomplete=\"off\" placeholder=\"https://m.example.com/app-landing\">\n" \
+"            <div class=\"row\">\n" \
+"              <div class=\"field\">\n" \
+"                <label for=\"mobileUrl\">Mobile Deep-Link / Smart Target URL (optional)</label>\n" \
+"                <input id=\"mobileUrl\" type=\"url\" autocomplete=\"off\" placeholder=\"https://m.example.com/app-landing\">\n" \
+"              </div>\n" \
+"              <div class=\"field\">\n" \
+"                <label for=\"redirectCode\">HTTP Redirect Status</label>\n" \
+"                <select id=\"redirectCode\">\n" \
+"                  <option value=\"302\">302 Found (Temporary, Default)</option>\n" \
+"                  <option value=\"301\">301 Moved Permanently (SEO)</option>\n" \
+"                  <option value=\"307\">307 Temporary Redirect (Method Preserving)</option>\n" \
+"                  <option value=\"308\">308 Permanent Redirect (Method Preserving)</option>\n" \
+"                </select>\n" \
+"              </div>\n" \
 "            </div>\n" \
 "            <div class=\"row\">\n" \
 "              <div class=\"field\"><label for=\"altUrl\">A/B Split Variant B URL (optional)</label><input id=\"altUrl\" type=\"url\" autocomplete=\"off\" placeholder=\"https://example.com/landing-v2\"></div>\n" \
@@ -154,7 +165,7 @@
 "    </section>\n" \
 "  </main>\n" \
 "  <footer>\n" \
-"    <a href=\"/health\">Service Health</a> &middot; <a href=\"/admin\">Admin</a> &middot; <a href=\"/sitemap.xml\">Sitemap</a> &middot; Built in C17 with libmicrohttpd &amp; SQLite\n" \
+"    <a href=\"/health\">Service Health</a> &middot; <a href=\"/openapi.json\">OpenAPI 3.0</a> &middot; <a href=\"/admin\">Admin</a> &middot; <a href=\"/sitemap.xml\">Sitemap</a> &middot; Built in C17 with libmicrohttpd &amp; SQLite\n" \
 "  </footer>\n" \
 "  <script src=\"/assets/index.js\" defer></script>\n" \
 "</body>\n" \

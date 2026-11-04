@@ -55,6 +55,7 @@ Send the master Admin API key or a Scoped Creator Token (`csh_...`) in the `X-AP
 | `DELETE /<slug>` | Admin Key | Delete a link and its visit records |
 | `GET /api/admin/export.csv` | Admin Key | Export links & metrics as formula-sanitized RFC 4180 CSV |
 | `GET /api/admin/backup.json` | Admin Key | Export full JSON snapshot backup (`c.micutu.com-snapshot-v1`) |
+| `POST /api/admin/restore` | Admin Key | Restore/import links from a JSON snapshot backup |
 | `GET /api/admin/tokens` | Admin Key | List scoped creator tokens |
 | `POST /api/admin/tokens` | Admin Key | Create a scoped creator token (`name`, optional `ttl_days`) |
 | `DELETE /api/admin/tokens/<id>` | Admin Key | Revoke a scoped creator token |
@@ -62,6 +63,7 @@ Send the master Admin API key or a Scoped Creator Token (`csh_...`) in the `X-AP
 | `GET /api/admin/system` | Admin Key | C17 runtime, SQLite database size, uptime, and link/visit counters JSON |
 | `GET /metrics` | Admin Key | Prometheus text-format metrics exporter |
 | `POST /api/admin/cleanup` | Admin Key | Immediately purge expired links |
+| `GET /openapi.json` | Public | OpenAPI 3.0.3 JSON specification |
 | `GET /health` | Public | JSON health check (`{"status":"ok"}`) |
 | `GET /robots.txt`, `/sitemap.xml`, `/manifest.json` | Public | SEO & Web App Manifest endpoints |
 
